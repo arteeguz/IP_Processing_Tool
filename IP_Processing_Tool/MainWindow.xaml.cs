@@ -56,14 +56,14 @@ namespace IPProcessingTool
             {
                 new ColumnSetting { Name = "IP Address", IsSelected = true },
                 new ColumnSetting { Name = "Hostname", IsSelected = true },
-                new ColumnSetting { Name = "Last Logged User", IsSelected = true },
-                new ColumnSetting { Name = "Machine Type", IsSelected = true },
-                new ColumnSetting { Name = "Machine SKU", IsSelected = true },
-                new ColumnSetting { Name = "Installed Core Software", IsSelected = true },
-                new ColumnSetting { Name = "RAM Size", IsSelected = true },
-                new ColumnSetting { Name = "Windows Version", IsSelected = true },
-                new ColumnSetting { Name = "Windows Release", IsSelected = true },
-                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = true }, // New Column
+                new ColumnSetting { Name = "Last Logged User", IsSelected = false },
+                new ColumnSetting { Name = "Machine Type", IsSelected = false },
+                new ColumnSetting { Name = "Machine SKU", IsSelected = false },
+                new ColumnSetting { Name = "Installed Core Software", IsSelected = false },
+                new ColumnSetting { Name = "RAM Size", IsSelected = false },
+                new ColumnSetting { Name = "Windows Version", IsSelected = false },
+                new ColumnSetting { Name = "Windows Release", IsSelected = false },
+                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
                 new ColumnSetting { Name = "Date", IsSelected = true },
                 new ColumnSetting { Name = "Time", IsSelected = true },
                 new ColumnSetting { Name = "Status", IsSelected = true },
@@ -134,7 +134,7 @@ namespace IPProcessingTool
 
         private async void Button3_Click(object sender, RoutedEventArgs e)
         {
-            var inputWindow = new InputWindow("Enter the IP segment (e.g., 192.168.1):", true);
+            var inputWindow = new InputWindow("Enter the IP segment:", true);
             if (inputWindow.ShowDialog() == true)
             {
                 string segment = inputWindow.InputText;
@@ -245,112 +245,55 @@ namespace IPProcessingTool
                         Authentication = System.Management.AuthenticationLevel.PacketPrivacy
                     };
 
-                    ManagementScope scope = new ManagementScope($"\\\\{ip}\\root\\cimv2", options);
-
+                    var scope = new System.Management.ManagementScope($"\\\\{ip}\\root\\cimv2", options);
                     try
                     {
-                        Task connectTask = Task.Run(() => scope.Connect(), cancellationToken);
-                        if (await Task.WhenAny(connectTask, Task.Delay(5000, cancellationToken)) == connectTask)
+                        await Task.Run(() => scope.Connect(), cancellationToken);
+
+                        var tasks = new List<Task>();
+
+                        if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Type")))
                         {
-                            await connectTask; // Connection successful
-                        }
-                        else
-                        {
-                            throw new TimeoutException("WMI connection timed out.");
+                            tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
                         }
 
-                        // Check which columns are selected in the settings
-                        var selectedColumns = dataColumnSettings.Where(c => c.IsSelected).Select(c => c.Name).ToList();
-
-                        if (selectedColumns.Contains("Hostname") || selectedColumns.Contains("Machine Type"))
+                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine SKU"))
                         {
-                            var machineQuery = new ObjectQuery("SELECT Name, Model FROM Win32_ComputerSystem");
-                            var machineSearcher = new ManagementObjectSearcher(scope, machineQuery);
-                            var machine = await Task.Run(() => machineSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                            if (machine != null)
+                            tasks.Add(GetMachineSKUAsync(scope, scanStatus, cancellationToken));
+                        }
+
+                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
                             {
-                                if (selectedColumns.Contains("Hostname"))
-                                    scanStatus.Hostname = machine["Name"]?.ToString();
-                                if (selectedColumns.Contains("Machine Type"))
-                                    scanStatus.MachineType = machine["Model"]?.ToString();
+                                tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
                             }
-                        }
 
-                        if (selectedColumns.Contains("Machine SKU"))
-                        {
-                            var skuQuery = new ObjectQuery("SELECT Version FROM Win32_ComputerSystemProduct");
-                            var skuSearcher = new ManagementObjectSearcher(scope, skuQuery);
-                            var sku = await Task.Run(() => skuSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                            if (sku != null)
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Installed Core Software"))
                             {
-                                scanStatus.MachineSKU = sku["Version"]?.ToString();
+                                tasks.Add(GetInstalledSoftwareAsync(scope, scanStatus, cancellationToken));
                             }
-                        }
 
-                        if (selectedColumns.Contains("Last Logged User"))
-                        {
-                            var userQuery = new ObjectQuery("SELECT UserName FROM Win32_ComputerSystem");
-                            var userSearcher = new ManagementObjectSearcher(scope, userQuery);
-                            var user = await Task.Run(() => userSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                            if (user != null)
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
                             {
-                                scanStatus.LastLoggedUser = user["UserName"]?.ToString();
+                                tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
                             }
-                        }
 
-                        if (selectedColumns.Contains("Installed Core Software"))
-                        {
-                            var softwareQuery = new ObjectQuery("SELECT Name, Version FROM Win32_Product");
-                            var softwareSearcher = new ManagementObjectSearcher(scope, softwareQuery);
-                            var softwareList = await Task.Run(() => softwareSearcher.Get().Cast<ManagementObject>()
-                                .Select(soft => $"{soft["Name"]} ({soft["Version"]})")
-                                .Take(10)
-                                .ToList(), cancellationToken);
-                            scanStatus.InstalledCoreSoftware = string.Join(", ", softwareList);
-                        }
-
-                        if (selectedColumns.Contains("RAM Size"))
-                        {
-                            var ramQuery = new ObjectQuery("SELECT Capacity FROM Win32_PhysicalMemory");
-                            var ramSearcher = new ManagementObjectSearcher(scope, ramQuery);
-                            var totalRam = await Task.Run(() => ramSearcher.Get().Cast<ManagementObject>().Sum(ram => Convert.ToDouble(ram["Capacity"])), cancellationToken);
-                            scanStatus.RAMSize = $"{totalRam / (1024 * 1024 * 1024):F2} GB";
-                        }
-
-                        if (selectedColumns.Contains("Windows Version") || selectedColumns.Contains("Windows Release"))
-                        {
-                            var osQuery = new ObjectQuery("SELECT Caption, BuildNumber FROM Win32_OperatingSystem");
-                            var osSearcher = new ManagementObjectSearcher(scope, osQuery);
-                            var os = await Task.Run(() => osSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                            if (os != null)
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Windows Version" || c.Name == "Windows Release")))
                             {
-                                if (selectedColumns.Contains("Windows Version"))
-                                    scanStatus.WindowsVersion = os["Caption"]?.ToString();
-                                if (selectedColumns.Contains("Windows Release"))
-                                {
-                                    string buildNumber = os["BuildNumber"]?.ToString();
-                                    scanStatus.WindowsVersion = MapWindowsRelease(buildNumber, ip);
-                                }
+                                tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
                             }
-                        }
 
-                        // New Code: Query Microsoft Office Version
-                        if (selectedColumns.Contains("Microsoft Office Version"))
-                        {
-                            var officeQuery = new ObjectQuery("SELECT Name, Version FROM Win32_Product WHERE Name LIKE 'Microsoft Office%'");
-                            var officeSearcher = new ManagementObjectSearcher(scope, officeQuery);
-                            var officeList = await Task.Run(() => officeSearcher.Get().Cast<ManagementObject>()
-                                .Select(office => $"{office["Name"]} ({office["Version"]})")
-                                .ToList(), cancellationToken);
-                            scanStatus.MicrosoftOfficeVersion = string.Join(", ", officeList);
-                        }
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
+                            {
+                                tasks.Add(GetOfficeVersionAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                        await Task.WhenAll(tasks);
 
                         scanStatus.Status = "Complete";
                         scanStatus.Details = "N/A";
                     }
                     catch (COMException ex) when (ex.Message.Contains("The RPC server is unavailable"))
                     {
-                        // Log and skip to the next IP
                         Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. RPC server unavailable. Moving on. Error: {ex.Message}", context: "ProcessIPAsync");
                         scanStatus.Status = "Error";
                         scanStatus.Details = "The RPC server is unavailable.";
@@ -369,11 +312,7 @@ namespace IPProcessingTool
                     Logger.Log(LogLevel.WARNING, $"Host not reachable for IP {ip}", context: "ProcessIPAsync");
                 }
 
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    Logger.Log(LogLevel.INFO, "Cancellation requested", context: "ProcessIPAsync");
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException)
             {
@@ -390,6 +329,138 @@ namespace IPProcessingTool
             }
         }
 
+        private async Task GetComputerSystemInfoAsync(System.Management.ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var machineQuery = new System.Management.ObjectQuery("SELECT Name, Model FROM Win32_ComputerSystem");
+                using (var machineSearcher = new System.Management.ManagementObjectSearcher(scope, machineQuery))
+                {
+                    var machine = await Task.Run(() => machineSearcher.Get().Cast<System.Management.ManagementObject>().FirstOrDefault(), cancellationToken);
+                    if (machine != null)
+                    {
+                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Hostname"))
+                            scanStatus.Hostname = machine["Name"]?.ToString() ?? "N/A";
+                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine Type"))
+                            scanStatus.MachineType = machine["Model"]?.ToString() ?? "N/A";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting computer system info: {ex.Message}", context: "GetComputerSystemInfoAsync");
+            }
+        }
+
+        private async Task GetMachineSKUAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var skuQuery = new ObjectQuery("SELECT Version FROM Win32_ComputerSystemProduct");
+                using var skuSearcher = new ManagementObjectSearcher(scope, skuQuery);
+                var sku = await Task.Run(() => skuSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+                if (sku != null)
+                {
+                    scanStatus.MachineSKU = sku["Version"]?.ToString() ?? "N/A";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting machine SKU: {ex.Message}", context: "GetMachineSKUAsync");
+            }
+        }
+
+        private async Task GetLastLoggedUserAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var userQuery = new ObjectQuery("SELECT UserName FROM Win32_ComputerSystem");
+                using var userSearcher = new ManagementObjectSearcher(scope, userQuery);
+                var user = await Task.Run(() => userSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+                if (user != null)
+                {
+                    scanStatus.LastLoggedUser = user["UserName"]?.ToString() ?? "N/A";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting last logged user: {ex.Message}", context: "GetLastLoggedUserAsync");
+            }
+        }
+
+        private async Task GetInstalledSoftwareAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var softwareQuery = new ObjectQuery("SELECT Name, Version FROM Win32_Product");
+                using var softwareSearcher = new ManagementObjectSearcher(scope, softwareQuery);
+                var softwareList = await Task.Run(() => softwareSearcher.Get().Cast<ManagementObject>()
+                    .Select(soft => $"{soft["Name"]} ({soft["Version"]})")
+                    .Take(10)
+                    .ToList(), cancellationToken);
+                scanStatus.InstalledCoreSoftware = string.Join(", ", softwareList);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting installed software: {ex.Message}", context: "GetInstalledSoftwareAsync");
+            }
+        }
+
+        private async Task GetRAMSizeAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var ramQuery = new ObjectQuery("SELECT Capacity FROM Win32_PhysicalMemory");
+                using var ramSearcher = new ManagementObjectSearcher(scope, ramQuery);
+                var totalRam = await Task.Run(() => ramSearcher.Get().Cast<ManagementObject>().Sum(ram => Convert.ToDouble(ram["Capacity"])), cancellationToken);
+                scanStatus.RAMSize = $"{totalRam / (1024 * 1024 * 1024):F2} GB";
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting RAM size: {ex.Message}", context: "GetRAMSizeAsync");
+            }
+        }
+
+        private async Task GetWindowsInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var osQuery = new ObjectQuery("SELECT Caption, BuildNumber FROM Win32_OperatingSystem");
+                using var osSearcher = new ManagementObjectSearcher(scope, osQuery);
+                var os = await Task.Run(() => osSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+                if (os != null)
+                {
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Version"))
+                        scanStatus.WindowsVersion = os["Caption"]?.ToString() ?? "N/A";
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Release"))
+                    {
+                        string buildNumber = os["BuildNumber"]?.ToString() ?? "N/A";
+                        scanStatus.WindowsRelease = MapWindowsRelease(buildNumber, scanStatus.IPAddress);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting Windows info: {ex.Message}", context: "GetWindowsInfoAsync");
+            }
+        }
+
+        private async Task GetOfficeVersionAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var officeQuery = new ObjectQuery("SELECT Name, Version FROM Win32_Product WHERE Name LIKE 'Microsoft Office%'");
+                using var officeSearcher = new ManagementObjectSearcher(scope, officeQuery);
+                var officeList = await Task.Run(() => officeSearcher.Get().Cast<ManagementObject>()
+                    .Select(office => $"{office["Name"]} ({office["Version"]})")
+                    .ToList(), cancellationToken);
+                scanStatus.MicrosoftOfficeVersion = string.Join(", ", officeList);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting Microsoft Office version: {ex.Message}", context: "GetOfficeVersionAsync");
+            }
+        }
 
         private async Task<bool> PingHostAsync(string ip, CancellationToken cancellationToken)
         {
