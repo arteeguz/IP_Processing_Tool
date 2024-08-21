@@ -179,6 +179,7 @@ namespace IPProcessingTool
             if (openFileDialog.ShowDialog() == true)
             {
                 string csvPath = openFileDialog.FileName;
+
                 try
                 {
                     Logger.Log(LogLevel.INFO, "User selected CSV file for segment scan", context: "Button4_Click", additionalInfo: csvPath);
@@ -186,17 +187,16 @@ namespace IPProcessingTool
                     var segments = File.ReadAllLines(csvPath).Select(line => line.Trim()).ToList();
                     var ips = segments.SelectMany(segment => Enumerable.Range(0, 256).Select(i => $"{segment}.{i}"));
                     await ProcessIPsAsync(ips);
+                }
                 catch (IOException ex)
                 {
                     if (ex.Message.Contains("being used by another process"))
                     {
                         MessageBox.Show("The file is currently being used by another process. Please close the file and try again.", "File Access Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        //Logger.Log(LogLever.ERROR, "File access error: The file is being used by another process.", content: "Button4_Click", additionalInfo: csvPath);
                     }
                     else
                     {
                         MessageBox.Show($"An error occured while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        //Logger.Log(LogLever.ERROR, $"File access error: {ex.Message}", Content: "Button4_Click", additionalInfo: csvPath);
                     }
                 }
             }
