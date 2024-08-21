@@ -574,15 +574,27 @@ namespace IPProcessingTool
         {
             if (string.IsNullOrEmpty(buildNumber)) return "Unknown";
 
-            string versionDetail = GetWindowsVersionDetail(ipAddress, buildNumber);
-
-            if (int.Parse(buildNumber) >= 22000)
+            switch (buildNumber)
             {
-                return $"Windows 11 {versionDetail}";
-            }
-            else
-            {
-                return $"Windows 10 {versionDetail}";
+                case "19041":
+                case "19042":
+                case "19043":
+                case "19044":
+                    return "Windows 10 20H2";
+                case "19045":
+                    // Here, we check the DisplayVersion or ReleaseId to distinguish between 21H2 and 22H2
+                    string versionDetail = GetWindowsVersionDetail(ipAddress, buildNumber);
+                    return $"Windows 10 {versionDetail}";
+                case "22000":
+                    return "Windows 11 21H2";
+                case "22621":
+                case "22622":
+                    return "Windows 11 22H2";
+                case "22631":
+                case "22632":
+                    return "Windows 11 23H2";
+                default:
+                    return $"Unknown (Build {buildNumber})";
             }
         }
 
@@ -598,35 +610,28 @@ namespace IPProcessingTool
                 {
                     if (regKey != null)
                     {
-                        // First, try to get DisplayVersion
-                        versionDetail = regKey.GetValue("DisplayVersion") as string;
-
-                        // If DisplayVersion is null or empty, fall back to ReleaseId
-                        if (string.IsNullOrEmpty(versionDetail))
-                        {
-                            versionDetail = regKey.GetValue("ReleaseId") as string;
-                        }
+                        versionDetail = regKey.GetValue("DisplayVersion")?.ToString();
                     }
                 }
 
-                // If we still don't have a version detail, use the build number to infer
-                if (string.IsNullOrEmpty(versionDetail) || versionDetail == "Unknown")
+                if (string.IsNullOrEmpty(versionDetail))
                 {
-                    versionDetail = buildNumber switch
+                    // Fall back to ReleaseId if DisplayVersion is not available
+                    using (var regKey = string.IsNullOrEmpty(ipAddress) ?
+                           Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion") :
+                           RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, ipAddress)
+                                      .OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
                     {
-                        "19041" => "2004",
-                        "19042" => "20H2",
-                        "19043" => "21H1",
-                        "19044" => "21H2",
-                        "19045" => "22H2",
-                        "22000" => "21H2",
-                        "22621" => "22H2",
-                        "22631" => "23H2",
-                        _ => $"Unknown (Build {buildNumber})"
-                    };
+                        versionDetail = regKey.GetValue("ReleaseId")?.ToString();
+                    }
                 }
 
-                return versionDetail;
+                return versionDetail switch
+                {
+                    "21H2" => "21H2",
+                    "22H2" => "22H2",
+                    _ => $"Unknown (Build {buildNumber})"
+                };
             }
             catch (Exception ex)
             {
