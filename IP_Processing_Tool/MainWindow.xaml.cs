@@ -478,20 +478,60 @@ namespace IPProcessingTool
             }
         }
 
-        private async Task GetOfficeVersionAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        private async Task GetOfficeVersionAsync(string machineName, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
             try
             {
-                var officeQuery = new ObjectQuery("SELECT Name, Version FROM Win32_Product WHERE Name LIKE 'Microsoft Office%'");
-                using var officeSearcher = new ManagementObjectSearcher(scope, officeQuery);
-                var officeList = await Task.Run(() => officeSearcher.Get().Cast<ManagementObject>()
-                    .Select(office => $"{office["Name"]} ({office["Version"]})")
-                    .ToList(), cancellationToken);
-                scanStatus.MicrosoftOfficeVersion = string.Join(", ", officeList);
+                string officeVersion = "Not Installed";
+                string registryPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+                string[] officeKeywords = new[] { "Microsoft Office", "Office 365", "Microsoft 365" };
+
+                using (RegistryKey baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, machineName))
+                using (RegistryKey uninstallKey = baseKey.OpenSubKey(registryPath))
+                {
+                    if (uninstallKey != null)
+                    {
+                        foreach (string subKeyName in uninstallKey.GetSubKeyNames())
+                        {
+                            using (RegistryKey officeKey = uninstallKey.OpenSubKey(subKeyName))
+                            {
+                                if (officeKey != null)
+                                {
+                                    string displayName = officeKey.GetValue("DisplayName") as string;
+                                    string displayVersion = officeKey.GetValue("DisplayVersion") as string;
+
+                                    if (!string.IsNullOrEmpty(displayName) && !string.IsNullOrEmpty(displayVersion))
+                                    {
+                                        if (officeKeywords.Any(keyword => displayName.Contains(keyword, StringComparison.OrdinalIgnoreCase)) &&
+                                            !displayName.Contains("Runtime", StringComparison.OrdinalIgnoreCase) &&
+                                            !displayName.Contains("Tools", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            officeVersion = $"{displayName} ({displayVersion})";
+
+                                            // Determine specific version if not clear from displayName
+                                            if (!displayName.Contains("365") && !displayName.Contains("2013") && !displayName.Contains("2016") && !displayName.Contains("2019"))
+                                            {
+                                                if (displayVersion.StartsWith("15."))
+                                                    officeVersion += " (Office 2013)";
+                                                else if (displayVersion.StartsWith("16."))
+                                                    officeVersion += " (Office 2016 or newer)";
+                                            }
+
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                scanStatus.MicrosoftOfficeVersion = officeVersion;
             }
             catch (Exception ex)
             {
-                Logger.Log(LogLevel.ERROR, $"Error getting Microsoft Office version: {ex.Message}", context: "GetOfficeVersionAsync");
+                Logger.Log(LogLevel.ERROR, $"Error getting Microsoft Office version for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
+                scanStatus.MicrosoftOfficeVersion = "Error";
             }
         }
 
