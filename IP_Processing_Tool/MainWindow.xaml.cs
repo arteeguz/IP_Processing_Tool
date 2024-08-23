@@ -269,8 +269,13 @@ namespace IPProcessingTool
 
             try
             {
+                // Measure the ping time
+                var stopwatch = Stopwatch.StartNew();  // Start timing the ping
                 if (await PingHostAsync(ip, cancellationToken))
                 {
+                    stopwatch.Stop();  // Stop timing the ping
+                    var pingTime = stopwatch.ElapsedMilliseconds;
+
                     ConnectionOptions options = new ConnectionOptions
                     {
                         Impersonation = ImpersonationLevel.Impersonate,
@@ -322,19 +327,19 @@ namespace IPProcessingTool
 
                         await Task.WhenAll(tasks);
 
-                        scanStatus.Status = "Complete";
+                        scanStatus.Status = $"Complete ({pingTime} ms)";
                         scanStatus.Details = "N/A";
                     }
                     catch (COMException ex) when (ex.Message.Contains("The RPC server is unavailable"))
                     {
                         Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. RPC server unavailable. Moving on. Error: {ex.Message}", context: "ProcessIPAsync");
-                        scanStatus.Status = "Error";
+                        scanStatus.Status = $"Error ({pingTime} ms)";
                         scanStatus.Details = "The RPC server is unavailable.";
                     }
                     catch (Exception ex)
                     {
                         Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. Moving on. Error: {ex.Message}", context: "ProcessIPAsync");
-                        scanStatus.Status = "Error";
+                        scanStatus.Status = $"Error ({pingTime} ms)";
                         scanStatus.Details = "Failed to connect.";
                     }
                 }
@@ -874,7 +879,7 @@ namespace IPProcessingTool
             }
         }
     }
-
+    
     public class ScanStatus
     {
         public string IPAddress { get; set; }
