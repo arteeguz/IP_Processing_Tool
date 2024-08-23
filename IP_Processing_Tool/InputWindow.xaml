@@ -43,7 +43,6 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <Label Name="InputLabel" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Top" 
@@ -65,11 +64,10 @@
         <TextBlock Text="{Binding ErrorMessage, RelativeSource={RelativeSource AncestorType=Window}}" 
                    Foreground="Red" FontSize="12" Margin="97,0,10,10" Grid.Row="2"/>
 
-        <TextBox Name="IPListTextBox" Grid.Row="3" Margin="0,10,0,0" FontSize="14" 
-                 BorderBrush="#CCCCCC" BorderThickness="1" Padding="5"
-                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto" IsReadOnly="True" HorizontalAlignment="Center" Width="480" Height="136" VerticalAlignment="Top"/>
+        <ListBox Name="IPListBox" Grid.Row="2" Margin="97,30,97,10" 
+                 BorderBrush="#CCCCCC" BorderThickness="1"/>
 
-        <StackPanel Orientation="Horizontal" Grid.Row="4" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10">
+        <StackPanel Orientation="Horizontal" Grid.Row="3" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10">
             <Button Name="SubmitButton" Content="Submit" Click="Submit_Click" Width="100" 
                     Background="#007BFF" BorderBrush="#007BFF"/>
             <Button Name="BackButton" Content="Back" Click="Back_Click" Width="100" 

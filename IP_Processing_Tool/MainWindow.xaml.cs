@@ -103,17 +103,9 @@ namespace IPProcessingTool
             var inputWindow = new InputWindow("Enter the IP address:", false);
             if (inputWindow.ShowDialog() == true)
             {
-                string ip = inputWindow.InputText;
-                if (IsValidIP(ip))
-                {
-                    Logger.Log(LogLevel.INFO, "User input IP address", context: "Button1_Click", additionalInfo: ip);
-                    await ProcessIPsAsync(new[] { ip });
-                }
-                else
-                {
-                    Logger.Log(LogLevel.WARNING, "Invalid IP address input", context: "Button1_Click", additionalInfo: ip);
-                    ShowInvalidInputMessage();
-                }
+                string[] ips = inputWindow.InputText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                Logger.Log(LogLevel.INFO, "User input IP addresses", context: "Button1_Click", additionalInfo: string.Join(", ", ips));
+                await ProcessIPsAsync(ips);
             }
         }
 
@@ -155,18 +147,10 @@ namespace IPProcessingTool
             var inputWindow = new InputWindow("Enter the IP segment:", true);
             if (inputWindow.ShowDialog() == true)
             {
-                string segment = inputWindow.InputText;
-                if (IsValidIPSegment(segment))
-                {
-                    Logger.Log(LogLevel.INFO, "User input IP segment", context: "Button3_Click", additionalInfo: segment);
-                    var ips = Enumerable.Range(0, 256).Select(i => $"{segment}.{i}");
-                    await ProcessIPsAsync(ips);
-                }
-                else
-                {
-                    Logger.Log(LogLevel.WARNING, "Invalid IP segment input", context: "Button3_Click", additionalInfo: segment);
-                    ShowInvalidInputMessage();
-                }
+                string[] segments = inputWindow.InputText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                Logger.Log(LogLevel.INFO, "User input IP segments", context: "Button3_Click", additionalInfo: string.Join(", ", segments));
+                var ips = segments.SelectMany(segment => Enumerable.Range(0, 256).Select(i => $"{segment}.{i}"));
+                await ProcessIPsAsync(ips);
             }
         }
 
