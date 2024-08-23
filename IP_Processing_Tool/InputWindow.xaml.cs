@@ -191,7 +191,7 @@ namespace IPProcessingTool
 
             if (isValid)
             {
-                IPListTextBox.AppendText(input + Environment.NewLine);
+                IPListBox.Items.Add(input);
                 InputTextBox.Clear();
                 InputTextBoxBorderBrush = Brushes.Gray;
                 InputTextBoxToolTip = null;
@@ -208,9 +208,9 @@ namespace IPProcessingTool
 
         private void Submit_Click(object sender, RoutedEventArgs e)
         {
-            InputText = IPListTextBox.Text.Trim();
-            if (!string.IsNullOrEmpty(InputText))
+            if (IPListBox.Items.Count > 0)
             {
+                InputText = string.Join(Environment.NewLine, IPListBox.Items.Cast<string>());
                 DialogResult = true;
                 Close();
             }
