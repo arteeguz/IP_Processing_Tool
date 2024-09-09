@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net;
+using System.Net.Mail;
 using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Runtime.InteropServices;
@@ -16,6 +17,7 @@ using System.Windows;
 using System.Windows.Controls;
 using IP_Processing_Tool;
 using Microsoft.Win32;
+using System.Runtime.InteropServices;
 
 namespace IPProcessingTool
 {
@@ -56,6 +58,7 @@ namespace IPProcessingTool
             dataColumnSettings = new ObservableCollection<ColumnSetting>
             {
                 new ColumnSetting { Name = "IP Address", IsSelected = true },
+                new ColumnSetting { Name = "MAC Address", IsSelected = true },
                 new ColumnSetting { Name = "Hostname", IsSelected = true },
                 new ColumnSetting { Name = "Last Logged User", IsSelected = false },
                 new ColumnSetting { Name = "Machine Type", IsSelected = false },
@@ -259,6 +262,8 @@ namespace IPProcessingTool
                 {
                     stopwatch.Stop();  // Stop timing the ping
                     var pingTime = stopwatch.ElapsedMilliseconds;
+
+                    scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
 
                     ConnectionOptions options = new ConnectionOptions
                     {
@@ -629,6 +634,35 @@ namespace IPProcessingTool
             }
         }
 
+        private async Task<string> GetMACAddressAsync(string ipAddress, CancellationToken cancellationToken)
+        {
+            try
+            {
+                IPAddress ip = IPAddress.Parse(ipAddress);
+                byte[] macAddr = new byte[6];
+                uint macAddrLen = (uint)macAddr.Length;
+
+                if (SendARP((int)ip.Address, 0, macAddr, ref macAddrLen) != 0)
+                {
+                    return "Not Available";
+                }
+
+                string[] str = new string[(int)macAddrLen];
+                for (int i = 0; i < macAddrLen; i++)
+                    str[i] = macAddr[i].ToString("x2");
+
+                return string.Join(":", str);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting MAC address: {ex.Message}", context: "GetMACAddressAsync");
+                return "Error";
+            }
+        }
+
+        [DllImport("iphlpapi.dll", ExactSpelling = true)]
+        private static extern int SendARP(int destIP, int srcIP, byte[] macAddr, ref uint physicalAddrLen);
+
 
         private void AddScanStatus(ScanStatus scanStatus)
         {
@@ -880,6 +914,7 @@ namespace IPProcessingTool
         public string Time { get; set; }
         public string Status { get; set; }
         public string Details { get; set; }
+        public string MACAddress { get; set; }
 
         public ScanStatus()
         {
@@ -897,6 +932,7 @@ namespace IPProcessingTool
             Time = DateTime.Now.ToString("HH:mm");
             Status = "Not Started";
             Details = "N/A";
+            MACAddress = "N/A"; // Initialize new property
         }
     }
 
