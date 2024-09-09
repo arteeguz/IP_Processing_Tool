@@ -63,6 +63,9 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "Last Logged User", IsSelected = false },
                 new ColumnSetting { Name = "Machine Type", IsSelected = false },
                 new ColumnSetting { Name = "Machine SKU", IsSelected = false },
+                new ColumnSetting { Name = "Disk Size", IsSelected = true },
+                new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
+                new ColumnSetting { Name = "Other Drives", IsSelected = true },
                 new ColumnSetting { Name = "Installed Core Software", IsSelected = false },
                 new ColumnSetting { Name = "RAM Size", IsSelected = false },
                 new ColumnSetting { Name = "Windows Version", IsSelected = false },
@@ -256,13 +259,14 @@ namespace IPProcessingTool
 
             try
             {
-                // Measure the ping time
-                var stopwatch = Stopwatch.StartNew();  // Start timing the ping
-                if (await PingHostAsync(ip, cancellationToken))
-                {
-                    stopwatch.Stop();  // Stop timing the ping
-                    var pingTime = stopwatch.ElapsedMilliseconds;
+                var stopwatch = Stopwatch.StartNew();
+                var (pingSuccess, pingTime) = await PingHostAsync(ip, cancellationToken);
 
+                if (pingSuccess)
+                {
+                    scanStatus.Status = $"Reachable ({pingTime} ms)";
+
+                    // Get MAC Address
                     scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
 
                     ConnectionOptions options = new ConnectionOptions
@@ -314,10 +318,17 @@ namespace IPProcessingTool
                             tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
                         }
 
+                        if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space")))
+                        {
+                            tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
+                        }
+
                         await Task.WhenAll(tasks);
 
+                        stopwatch.Stop();
+                        var totalTime = stopwatch.ElapsedMilliseconds;
                         scanStatus.Status = $"Complete ({pingTime} ms)";
-                        scanStatus.Details = "N/A";
+                        scanStatus.Details = $"Total processing time: {totalTime} ms";
                     }
                     catch (COMException ex) when (ex.Message.Contains("The RPC server is unavailable"))
                     {
@@ -529,27 +540,14 @@ namespace IPProcessingTool
             }
         }
 
-        private async Task<bool> PingHostAsync(string ip, CancellationToken cancellationToken)
+        private async Task<(bool success, long roundTripTime)> PingHostAsync(string ip, CancellationToken cancellationToken)
         {
             try
             {
                 using (var ping = new Ping())
                 {
-                    var pingTask = ping.SendPingAsync(ip, pingTimeout, new byte[32], new PingOptions(64, true));
-                    var timeoutTask = Task.Delay(pingTimeout, cancellationToken);
-
-                    var completedTask = await Task.WhenAny(pingTask, timeoutTask);
-
-                    if (completedTask == pingTask)
-                    {
-                        var reply = await pingTask;
-                        return reply.Status == IPStatus.Success;
-                    }
-                    else
-                    {
-                        // Timeout occurred
-                        return false;
-                    }
+                    var reply = await ping.SendPingAsync(ip, pingTimeout);
+                    return (reply.Status == IPStatus.Success, reply.RoundtripTime);
                 }
             }
             catch (OperationCanceledException)
@@ -560,7 +558,7 @@ namespace IPProcessingTool
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Ping exception for IP {ip}", context: "PingHostAsync", additionalInfo: ex.Message);
-                return false;
+                return (false, -1);
             }
         }
 
@@ -662,6 +660,71 @@ namespace IPProcessingTool
 
         [DllImport("iphlpapi.dll", ExactSpelling = true)]
         private static extern int SendARP(int destIP, int srcIP, byte[] macAddr, ref uint physicalAddrLen);
+
+        private async Task GetDiskInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var diskQuery = new ObjectQuery("SELECT DeviceID, Size, FreeSpace FROM Win32_LogicalDisk WHERE DriveType = 3");
+                using var diskSearcher = new ManagementObjectSearcher(scope, diskQuery);
+                var disks = await Task.Run(() => diskSearcher.Get().Cast<ManagementObject>().ToList(), cancellationToken);
+
+                if (disks.Any())
+                {
+                    var cDrive = disks.FirstOrDefault(d => d["DeviceID"].ToString().Equals("C:", StringComparison.OrdinalIgnoreCase));
+                    var otherDrives = disks.Where(d => !d["DeviceID"].ToString().Equals("C:", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    if (cDrive != null)
+                    {
+                        double size = Convert.ToDouble(cDrive["Size"]);
+                        double freeSpace = Convert.ToDouble(cDrive["FreeSpace"]);
+                        double usedSpace = size - freeSpace;
+                        double usedPercentage = (usedSpace / size) * 100;
+                        double freePercentage = 100 - usedPercentage;
+
+                        scanStatus.DiskSize = $"C: {size / (1024 * 1024 * 1024):F2} GB";
+                        scanStatus.DiskFreeSpace = $"C: {freePercentage:F2}% ({freeSpace / (1024 * 1024 * 1024):F2} GB)";
+                    }
+                    else
+                    {
+                        scanStatus.DiskSize = "C: Not found";
+                        scanStatus.DiskFreeSpace = "C: N/A";
+                    }
+
+                    if (otherDrives.Any())
+                    {
+                        var otherDrivesInfo = new List<string>();
+                        foreach (var drive in otherDrives)
+                        {
+                            string deviceID = drive["DeviceID"].ToString();
+                            double size = Convert.ToDouble(drive["Size"]);
+                            double freeSpace = Convert.ToDouble(drive["FreeSpace"]);
+                            double freePercentage = (freeSpace / size) * 100;
+
+                            otherDrivesInfo.Add($"{deviceID}: {size / (1024 * 1024 * 1024):F2} GB, {freePercentage:F2}% free");
+                        }
+                        scanStatus.OtherDrives = string.Join(" | ", otherDrivesInfo);
+                    }
+                    else
+                    {
+                        scanStatus.OtherDrives = "No other drives";
+                    }
+                }
+                else
+                {
+                    scanStatus.DiskSize = "No disks found";
+                    scanStatus.DiskFreeSpace = "N/A";
+                    scanStatus.OtherDrives = "N/A";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting disk info: {ex.Message}", context: "GetDiskInfoAsync");
+                scanStatus.DiskSize = "Error";
+                scanStatus.DiskFreeSpace = "Error";
+                scanStatus.OtherDrives = "Error";
+            }
+        }
 
 
         private void AddScanStatus(ScanStatus scanStatus)
@@ -915,6 +978,9 @@ namespace IPProcessingTool
         public string Status { get; set; }
         public string Details { get; set; }
         public string MACAddress { get; set; }
+        public string DiskSize { get; set; }
+        public string DiskFreeSpace { get; set; }
+        public string OtherDrives { get; set; }
 
         public ScanStatus()
         {
@@ -933,6 +999,9 @@ namespace IPProcessingTool
             Status = "Not Started";
             Details = "N/A";
             MACAddress = "N/A"; // Initialize new property
+            DiskSize = "N/A";
+            DiskFreeSpace = "N/A";
+            OtherDrives = "N/A";
         }
     }
 
