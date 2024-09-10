@@ -238,9 +238,17 @@ namespace IPProcessingTool
                 EnableButtons();
                 UpdateStatusBar("Completed processing all IPs.");
                 UpdateProgressBar(100);
+
+                // Force a final update of the DataGrid
+                Dispatcher.Invoke(() =>
+                {
+                    StatusDataGrid.Items.Refresh();
+                });
+
                 HandleAutoSave();
             }
         }
+
         private async Task ProcessIPAsync(string ip, CancellationToken cancellationToken = default)
         {
             var scanStatus = new ScanStatus
@@ -744,12 +752,18 @@ namespace IPProcessingTool
             {
                 lock (ScanStatuses)
                 {
-                    var index = ScanStatuses.IndexOf(scanStatus);
-                    if (index != -1)
+                    var existingStatus = ScanStatuses.FirstOrDefault(s => s.IPAddress == scanStatus.IPAddress);
+                    if (existingStatus != null)
                     {
+                        int index = ScanStatuses.IndexOf(existingStatus);
                         ScanStatuses[index] = scanStatus;
                     }
+                    else
+                    {
+                        ScanStatuses.Add(scanStatus);
+                    }
                 }
+                StatusDataGrid.Items.Refresh();
             });
         }
 
