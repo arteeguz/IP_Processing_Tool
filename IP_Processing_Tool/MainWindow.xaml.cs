@@ -17,7 +17,6 @@ using System.Windows;
 using System.Windows.Controls;
 using IP_Processing_Tool;
 using Microsoft.Win32;
-using System.Runtime.InteropServices;
 
 namespace IPProcessingTool
 {
@@ -32,6 +31,10 @@ namespace IPProcessingTool
         private int pingTimeout = 1000; // Default value
         private int totalIPs;
         private int processedIPs;
+        private int individualScanTimeout = 30; // Default value in seconds
+        private int wmiOperationTimeout = 10; // Default value in seconds
+        private double scanCompletionThreshold = 0.95; // Default value
+        private int finalWaitTime = 60; // Default value in seconds
 
         public MainWindow()
         {
@@ -77,6 +80,7 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "Details", IsSelected = true }
             };
         }
+
         private void UpdateDataGridColumns()
         {
             StatusDataGrid.Columns.Clear();
@@ -92,13 +96,18 @@ namespace IPProcessingTool
 
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
-            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, parallelOptions.MaxDegreeOfParallelism);
+            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, parallelOptions.MaxDegreeOfParallelism,
+                                              individualScanTimeout, wmiOperationTimeout, scanCompletionThreshold, finalWaitTime);
             if (settingsWindow.ShowDialog() == true)
             {
                 dataColumnSettings = new ObservableCollection<ColumnSetting>(settingsWindow.DataColumns);
                 autoSave = settingsWindow.AutoSave;
                 pingTimeout = settingsWindow.PingTimeout;
                 parallelOptions.MaxDegreeOfParallelism = settingsWindow.MaxConcurrentScans;
+                individualScanTimeout = settingsWindow.IndividualScanTimeout;
+                wmiOperationTimeout = settingsWindow.WmiOperationTimeout;
+                scanCompletionThreshold = settingsWindow.ScanCompletionThreshold;
+                finalWaitTime = settingsWindow.FinalWaitTime;
 
                 UpdateDataGridColumns();
             }
@@ -138,10 +147,11 @@ namespace IPProcessingTool
                     {
                         MessageBox.Show("The file is currently being used by another process. Please close the file and try again.", "File Access Error", MessageBoxButton.OK, MessageBoxImage.Error);
                         //Logger.Log(LogLever.ERROR, "File access error: The file is being used by another process.", content: "Button2_Click", additionalInfo: csvPath);
+
                     }
                     else
                     {
-                        MessageBox.Show($"An error occured while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        MessageBox.Show($"An error occurred while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
                         //Logger.Log(LogLever.ERROR, $"File access error: {ex.Message}", Content: "Button2_Click", additionalInfo: csvPath);
                     }
                 }
@@ -186,7 +196,7 @@ namespace IPProcessingTool
                     }
                     else
                     {
-                        MessageBox.Show($"An error occured while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        MessageBox.Show($"An error occurred while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
                     }
                 }
             }
@@ -224,9 +234,18 @@ namespace IPProcessingTool
                         await Task.WhenAny(tasks);
                         tasks.RemoveAll(t => t.IsCompleted);
                     }
+
+                    // Check if we've reached the completion threshold
+                    if (processedIPs >= totalIPs * scanCompletionThreshold)
+                    {
+                        // Wait for a short time for remaining tasks to complete
+                        await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(TimeSpan.FromSeconds(finalWaitTime)));
+                        break;
+                    }
                 }
 
-                await Task.WhenAll(tasks);
+                // Wait for the final wait time for any remaining tasks
+                await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(TimeSpan.FromSeconds(finalWaitTime)));
             }
             catch (Exception ex)
             {
@@ -267,104 +286,31 @@ namespace IPProcessingTool
 
             try
             {
-                var stopwatch = Stopwatch.StartNew();
-                var (pingSuccess, pingTime) = await PingHostAsync(ip, cancellationToken);
+                var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(individualScanTimeout));
 
-                if (pingSuccess)
-                {
-                    scanStatus.Status = $"Reachable ({pingTime} ms)";
-
-                    // Get MAC Address
-                    scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
-
-                    ConnectionOptions options = new ConnectionOptions
-                    {
-                        Impersonation = ImpersonationLevel.Impersonate,
-                        EnablePrivileges = true,
-                        Authentication = System.Management.AuthenticationLevel.PacketPrivacy
-                    };
-
-                    var scope = new System.Management.ManagementScope($"\\\\{ip}\\root\\cimv2", options);
-                    try
-                    {
-                        await Task.Run(() => scope.Connect(), cancellationToken);
-
-                        var tasks = new List<Task>();
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Type")))
-                        {
-                            tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine SKU"))
-                        {
-                            tasks.Add(GetMachineSKUAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
-                        {
-                            tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Installed Core Software"))
-                        {
-                            tasks.Add(GetInstalledSoftwareAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
-                        {
-                            tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Windows Version" || c.Name == "Windows Release")))
-                        {
-                            tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
-                        {
-                            tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
-                        }
-
-                        if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space")))
-                        {
-                            tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
-                        }
-
-                        await Task.WhenAll(tasks);
-
-                        stopwatch.Stop();
-                        var totalTime = stopwatch.ElapsedMilliseconds;
-                        scanStatus.Status = $"Complete ({pingTime} ms)";
-                        scanStatus.Details = $"Total processing time: {totalTime} ms";
-                    }
-                    catch (COMException ex) when (ex.Message.Contains("The RPC server is unavailable"))
-                    {
-                        Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. RPC server unavailable. Moving on. Error: {ex.Message}", context: "ProcessIPAsync");
-                        scanStatus.Status = $"Error ({pingTime} ms)";
-                        scanStatus.Details = "The RPC server is unavailable.";
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. Moving on. Error: {ex.Message}", context: "ProcessIPAsync");
-                        scanStatus.Status = $"Error ({pingTime} ms)";
-                        scanStatus.Details = "Failed to connect.";
-                    }
-                }
-                else
-                {
-                    scanStatus.Status = "Not Reachable";
-                    scanStatus.Details = "Host not reachable";
-                    Logger.Log(LogLevel.WARNING, $"Host not reachable for IP {ip}", context: "ProcessIPAsync");
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
+                var processingTask = ProcessIPInternalAsync(ip, scanStatus, cts.Token);
+                await processingTask.WaitAsync(TimeSpan.FromSeconds(individualScanTimeout), cts.Token);
             }
             catch (OperationCanceledException)
             {
-                scanStatus.Status = "Cancelled";
-                scanStatus.Details = "Operation canceled by user";
-                Logger.Log(LogLevel.INFO, "Operation was canceled", context: "ProcessIPAsync");
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    scanStatus.Status = "Cancelled";
+                    scanStatus.Details = "Operation canceled by user";
+                }
+                else
+                {
+                    scanStatus.Status = "Timeout";
+                    scanStatus.Details = "Operation timed out";
+                }
+                Logger.Log(LogLevel.WARNING, $"Operation for IP {ip} was canceled or timed out", context: "ProcessIPAsync");
+            }
+            catch (Exception ex)
+            {
+                scanStatus.Status = "Error";
+                scanStatus.Details = $"Unexpected error: {ex.Message}";
+                Logger.Log(LogLevel.ERROR, $"Unexpected error processing IP {ip}: {ex.Message}", context: "ProcessIPAsync");
             }
             finally
             {
@@ -373,6 +319,103 @@ namespace IPProcessingTool
                 UpdateScanStatus(scanStatus);
                 UpdateStatusBar($"Completed processing IP: {ip} ({processedIPs}/{totalIPs})");
             }
+        }
+
+        private async Task ProcessIPInternalAsync(string ip, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var (pingSuccess, pingTime) = await PingHostAsync(ip, cancellationToken);
+
+            if (pingSuccess)
+            {
+                scanStatus.Status = $"Reachable ({pingTime} ms)";
+
+                // Get MAC Address
+                scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
+
+                ConnectionOptions options = new ConnectionOptions
+                {
+                    Impersonation = ImpersonationLevel.Impersonate,
+                    EnablePrivileges = true,
+                    Authentication = System.Management.AuthenticationLevel.PacketPrivacy,
+                    Timeout = TimeSpan.FromSeconds(wmiOperationTimeout)
+                };
+
+                var scope = new System.Management.ManagementScope($"\\\\{ip}\\root\\cimv2", options);
+                try
+                {
+                    await Task.Run(() => scope.Connect(), cancellationToken);
+
+                    var tasks = new List<Task>();
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Type")))
+                    {
+                        tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine SKU"))
+                    {
+                        tasks.Add(GetMachineSKUAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
+                    {
+                        tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Installed Core Software"))
+                    {
+                        tasks.Add(GetInstalledSoftwareAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
+                    {
+                        tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Windows Version" || c.Name == "Windows Release")))
+                    {
+                        tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
+                    {
+                        tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
+                    }
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space" || c.Name == "Other Drives")))
+                    {
+                        tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
+                    }
+
+                    await Task.WhenAll(tasks);
+
+                    stopwatch.Stop();
+                    var totalTime = stopwatch.ElapsedMilliseconds;
+                    scanStatus.Status = $"Complete ({pingTime} ms)";
+                    scanStatus.Details = $"Total processing time: {totalTime} ms";
+                }
+                catch (COMException ex) when (ex.Message.Contains("The RPC server is unavailable"))
+                {
+                    Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. RPC server unavailable. Moving on. Error: {ex.Message}", context: "ProcessIPInternalAsync");
+                    scanStatus.Status = $"Partial ({pingTime} ms)";
+                    scanStatus.Details = "The RPC server is unavailable. Some data may be incomplete.";
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. Moving on. Error: {ex.Message}", context: "ProcessIPInternalAsync");
+                    scanStatus.Status = $"Partial ({pingTime} ms)";
+                    scanStatus.Details = "Failed to retrieve all data. Some information may be incomplete.";
+                }
+            }
+            else
+            {
+                scanStatus.Status = "Not Reachable";
+                scanStatus.Details = "Host not reachable";
+                Logger.Log(LogLevel.WARNING, $"Host not reachable for IP {ip}", context: "ProcessIPInternalAsync");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         private async Task GetComputerSystemInfoAsync(System.Management.ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
@@ -974,7 +1017,7 @@ namespace IPProcessingTool
             }
         }
     }
-    
+
     public class ScanStatus
     {
         public string IPAddress { get; set; }
@@ -986,7 +1029,7 @@ namespace IPProcessingTool
         public string RAMSize { get; set; }
         public string WindowsVersion { get; set; }
         public string WindowsRelease { get; set; }
-        public string MicrosoftOfficeVersion { get; set; } // New Property
+        public string MicrosoftOfficeVersion { get; set; }
         public string Date { get; set; }
         public string Time { get; set; }
         public string Status { get; set; }
@@ -1007,16 +1050,15 @@ namespace IPProcessingTool
             RAMSize = "N/A";
             WindowsVersion = "N/A";
             WindowsRelease = "N/A";
-            MicrosoftOfficeVersion = "N/A"; // Initialize New Property
+            MicrosoftOfficeVersion = "N/A";
             Date = DateTime.Now.ToString("M/dd/yyyy");
             Time = DateTime.Now.ToString("HH:mm");
             Status = "Not Started";
             Details = "N/A";
-            MACAddress = "N/A"; // Initialize new property
+            MACAddress = "N/A";
             DiskSize = "N/A";
             DiskFreeSpace = "N/A";
             OtherDrives = "N/A";
         }
     }
-
 }
