@@ -110,10 +110,40 @@ namespace IPProcessingTool
                 finalWaitTime = settingsWindow.FinalWaitTime;
 
                 UpdateDataGridColumns();
+
+                if (settingsWindow.DataRetrievalOptionsChanged && ScanStatuses.Count > 0)
+                {
+                    var result = MessageBox.Show("Data retrieval options have changed. Would you like to rescan the previously scanned IP addresses?",
+                        "Rescan Confirmation", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        RescanPreviousIPs();
+                    }
+                }
             }
         }
 
-        private async void Button1_Click(object sender, RoutedEventArgs e)
+        private async void RescanPreviousIPs()
+        {
+            var ips = ScanStatuses.Select(s => s.IPAddress).ToList();
+            ScanStatuses.Clear();
+            await ProcessIPsAsync(ips);
+        }
+
+        // Add a new button to the UI for manual rescan
+        private void RescanButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (ScanStatuses.Count > 0)
+            {
+                RescanPreviousIPs();
+            }
+            else
+            {
+                MessageBox.Show("No previous scan data available. Please perform a scan first.", "No Data", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+    private async void Button1_Click(object sender, RoutedEventArgs e)
         {
             var inputWindow = new InputWindow("Enter the IP address:", false);
             if (inputWindow.ShowDialog() == true)
