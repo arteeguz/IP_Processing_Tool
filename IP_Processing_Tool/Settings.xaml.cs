@@ -15,11 +15,15 @@ namespace IPProcessingTool
         public int WmiOperationTimeout { get; set; }
         public double ScanCompletionThreshold { get; set; }
         public int FinalWaitTime { get; set; }
+        public bool DataRetrievalOptionsChanged { get; private set; }
+
+        private ObservableCollection<ColumnSetting> originalDataColumns;
 
         public Settings(ObservableCollection<ColumnSetting> currentDataColumns, bool autoSave, int pingTimeout, int maxConcurrentScans,
                         int individualScanTimeout, int wmiOperationTimeout, double scanCompletionThreshold, int finalWaitTime)
         {
             InitializeComponent();
+            originalDataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns);
             DataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, IsSelected = c.IsSelected }));
             DataColumnsList.ItemsSource = DataColumns;
             AutoSave = autoSave;
@@ -50,6 +54,10 @@ namespace IPProcessingTool
                 WmiOperationTimeout = int.Parse(WmiOperationTimeoutTextBox.Text);
                 ScanCompletionThreshold = double.Parse(ScanCompletionThresholdTextBox.Text);
                 FinalWaitTime = int.Parse(FinalWaitTimeTextBox.Text);
+
+                // Check if data retrieval options have changed
+                DataRetrievalOptionsChanged = HasDataRetrievalOptionsChanged();
+
                 DialogResult = true;
                 Close();
             }
@@ -95,11 +103,29 @@ namespace IPProcessingTool
             }
             return true;
         }
+
+        private bool HasDataRetrievalOptionsChanged()
+        {
+            return !DataColumns.SequenceEqual(originalDataColumns, new ColumnSettingComparer());
+        }
     }
 
     public class ColumnSetting
     {
         public string Name { get; set; }
         public bool IsSelected { get; set; }
+    }
+
+    public class ColumnSettingComparer : IEqualityComparer<ColumnSetting>
+    {
+        public bool Equals(ColumnSetting x, ColumnSetting y)
+        {
+            return x.Name == y.Name && x.IsSelected == y.IsSelected;
+        }
+
+        public int GetHashCode(ColumnSetting obj)
+        {
+            return obj.Name.GetHashCode() ^ obj.IsSelected.GetHashCode();
+        }
     }
 }
