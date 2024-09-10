@@ -143,7 +143,39 @@ namespace IPProcessingTool
             }
         }
 
-    private async void Button1_Click(object sender, RoutedEventArgs e)
+        private async void WakeOnLANButton_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedItems = StatusDataGrid.SelectedItems.Cast<ScanStatus>().ToList();
+            if (selectedItems.Count == 0)
+            {
+                MessageBox.Show("Please select at least one IP address to wake.", "No Selection", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            foreach (var scanStatus in selectedItems)
+            {
+                if (!string.IsNullOrEmpty(scanStatus.MACAddress))
+                {
+                    try
+                    {
+                        await WOL.WakeOnLan(scanStatus.MACAddress);
+                        Logger.Log(LogLevel.INFO, $"Wake-on-LAN packet sent to {scanStatus.IPAddress} (MAC: {scanStatus.MACAddress})", context: "WakeOnLAN");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log(LogLevel.ERROR, $"Error sending Wake-on-LAN packet to {scanStatus.IPAddress}: {ex.Message}", context: "WakeOnLAN");
+                    }
+                }
+                else
+                {
+                    Logger.Log(LogLevel.WARNING, $"MAC address not found for IP {scanStatus.IPAddress}", context: "WakeOnLAN");
+                }
+            }
+
+            MessageBox.Show("Wake-on-LAN packets sent to selected IP addresses.", "Wake-on-LAN", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private async void Button1_Click(object sender, RoutedEventArgs e)
         {
             var inputWindow = new InputWindow("Enter the IP address:", false);
             if (inputWindow.ShowDialog() == true)

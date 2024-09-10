@@ -76,9 +76,11 @@
                     VerticalAlignment="Top" HorizontalAlignment="Right"
                     Margin="0,20,60,0" Width="88"/>
 
-        <DataGrid Name="StatusDataGrid" Grid.Row="1" Margin="20,221,20,10" 
-                  AutoGenerateColumns="False" IsReadOnly="True" CanUserResizeColumns="True"/>
-
+        <DataGrid Name="StatusDataGrid" Grid.Row="1" Grid.ColumnSpan="2" Margin="20,221,20,10" 
+                  AutoGenerateColumns="False" IsReadOnly="True" CanUserResizeColumns="True"
+                  SelectionMode="Extended" SelectionUnit="FullRow">
+            <!-- Add your DataGrid.Columns here -->
+        </DataGrid>
         <ProgressBar Name="ProgressBar" Grid.Row="2" Height="20" Margin="10"/>
 
         <StatusBar Grid.Row="3" Grid.Column="0">
@@ -87,6 +89,7 @@
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
@@ -113,6 +116,10 @@
             <StatusBarItem Grid.Column="4">
                 <Button Name="ClearButton" Content="Clear Grid" Click="ClearButton_Click" 
                     Style="{StaticResource StopButtonStyle}" Width="75" Height="31"/>
+            </StatusBarItem>
+            <StatusBarItem Grid.Column="5">
+                <Button Name="WakeOnLANButton" Content="Wake-on-LAN" Click="WakeOnLANButton_Click" 
+            Style="{StaticResource MainButtonStyle}" Width="100" Height="32"/>
             </StatusBarItem>
         </StatusBar>
 
