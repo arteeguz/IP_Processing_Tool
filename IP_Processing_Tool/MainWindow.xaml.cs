@@ -35,6 +35,8 @@ namespace IPProcessingTool
         private int wmiOperationTimeout = 10; // Default value in seconds
         private double scanCompletionThreshold = 0.95; // Default value
         private int finalWaitTime = 60; // Default value in seconds
+        private const int BATCH_SIZE = 50;
+        private List<ScanStatus> _batch = new List<ScanStatus>();
 
         public MainWindow()
         {
@@ -273,41 +275,67 @@ namespace IPProcessingTool
             DisableButtons();
 
             cancellationTokenSource = new CancellationTokenSource();
-            var tasks = new List<Task>();
+            var semaphore = new SemaphoreSlim(parallelOptions.MaxDegreeOfParallelism);
 
             try
             {
-                foreach (var ip in ips)
+                var progress = new Progress<int>(value =>
                 {
-                    if (cancellationTokenSource.IsCancellationRequested)
-                        break;
+                    UpdateProgressBar(value);
+                    StatusDataGrid.Items.Refresh();
+                });
 
-                    if (IsValidIP(ip))
+                var ipBatches = ips.Chunk(BATCH_SIZE);
+                foreach (var batch in ipBatches)
+                {
+                    var tasks = batch.Select(async ip =>
                     {
-                        tasks.Add(ProcessIPAsync(ip, cancellationTokenSource.Token));
-                    }
-                    else
+                        await semaphore.WaitAsync(cancellationTokenSource.Token);
+                        try
+                        {
+                            if (IsValidIP(ip))
+                            {
+                                return await ProcessIPAsync(ip, cancellationTokenSource.Token);
+                            }
+                            else
+                            {
+                                HighlightInvalidInput(ip);
+                                return null;
+                            }
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+
+                    var results = await Task.WhenAll(tasks);
+
+                    lock (ScanStatuses)
                     {
-                        HighlightInvalidInput(ip);
+                        foreach (var result in results.Where(r => r != null))
+                        {
+                            UpdateScanStatus(result);
+                        }
                     }
 
-                    if (tasks.Count >= parallelOptions.MaxDegreeOfParallelism)
-                    {
-                        await Task.WhenAny(tasks);
-                        tasks.RemoveAll(t => t.IsCompleted);
-                    }
+                    processedIPs += batch.Length;
+                    ((IProgress<int>)progress).Report((int)((double)processedIPs / totalIPs * 100));
 
-                    // Check if we've reached the completion threshold
                     if (processedIPs >= totalIPs * scanCompletionThreshold)
                     {
-                        // Wait for a short time for remaining tasks to complete
-                        await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(TimeSpan.FromSeconds(finalWaitTime)));
                         break;
                     }
+
+                    cancellationTokenSource.Token.ThrowIfCancellationRequested();
                 }
 
                 // Wait for the final wait time for any remaining tasks
-                await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(TimeSpan.FromSeconds(finalWaitTime)));
+                await Task.Delay(TimeSpan.FromSeconds(finalWaitTime));
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Log(LogLevel.INFO, "Scan operation was cancelled", context: "ProcessIPsAsync");
             }
             catch (Exception ex)
             {
@@ -330,7 +358,7 @@ namespace IPProcessingTool
             }
         }
 
-        private async Task ProcessIPAsync(string ip, CancellationToken cancellationToken = default)
+        private async Task<ScanStatus> ProcessIPAsync(string ip, CancellationToken cancellationToken = default)
         {
             var scanStatus = new ScanStatus
             {
@@ -374,13 +402,8 @@ namespace IPProcessingTool
                 scanStatus.Details = $"Unexpected error: {ex.Message}";
                 Logger.Log(LogLevel.ERROR, $"Unexpected error processing IP {ip}: {ex.Message}", context: "ProcessIPAsync");
             }
-            finally
-            {
-                processedIPs++;
-                UpdateProgressBar((int)((double)processedIPs / totalIPs * 100));
-                UpdateScanStatus(scanStatus);
-                UpdateStatusBar($"Completed processing IP: {ip} ({processedIPs}/{totalIPs})");
-            }
+
+            return scanStatus;
         }
 
         private async Task ProcessIPInternalAsync(string ip, ScanStatus scanStatus, CancellationToken cancellationToken)
@@ -850,26 +873,38 @@ namespace IPProcessingTool
                 }
             });
         }
-
         private void UpdateScanStatus(ScanStatus scanStatus)
+        {
+            lock (_batch)
+            {
+                _batch.Add(scanStatus);
+                if (_batch.Count >= BATCH_SIZE)
+                {
+                    FlushBatch();
+                }
+            }
+        }
+
+        private void FlushBatch()
         {
             Dispatcher.Invoke(() =>
             {
-                lock (ScanStatuses)
+                foreach (var status in _batch)
                 {
-                    var existingStatus = ScanStatuses.FirstOrDefault(s => s.IPAddress == scanStatus.IPAddress);
+                    var existingStatus = ScanStatuses.FirstOrDefault(s => s.IPAddress == status.IPAddress);
                     if (existingStatus != null)
                     {
                         int index = ScanStatuses.IndexOf(existingStatus);
-                        ScanStatuses[index] = scanStatus;
+                        ScanStatuses[index] = status;
                     }
                     else
                     {
-                        ScanStatuses.Add(scanStatus);
+                        ScanStatuses.Add(status);
                     }
                 }
                 StatusDataGrid.Items.Refresh();
             });
+            _batch.Clear();
         }
 
         private void ClearButton_Click(object sender, RoutedEventArgs e)
