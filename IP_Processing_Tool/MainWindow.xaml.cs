@@ -59,6 +59,7 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "IP Address", IsSelected = true },
                 new ColumnSetting { Name = "MAC Address", IsSelected = true },
                 new ColumnSetting { Name = "Hostname", IsSelected = true },
+                new ColumnSetting { Name = "Ping Time", IsSelected = true },
                 new ColumnSetting { Name = "Last Logged User", IsSelected = false },
                 new ColumnSetting { Name = "Machine Type", IsSelected = false },
                 new ColumnSetting { Name = "Machine SKU", IsSelected = false },
@@ -82,11 +83,22 @@ namespace IPProcessingTool
             StatusDataGrid.Columns.Clear();
             foreach (var column in dataColumnSettings.Where(c => c.IsSelected))
             {
-                StatusDataGrid.Columns.Add(new DataGridTextColumn
+                if (column.Name == "Ping Time")
                 {
-                    Header = column.Name,
-                    Binding = new System.Windows.Data.Binding(column.Name.Replace(" ", ""))
-                });
+                    StatusDataGrid.Columns.Add(new DataGridTextColumn
+                    {
+                        Header = column.Name,
+                        Binding = new System.Windows.Data.Binding("PingTime") { StringFormat = "{0} ms" }
+                    });
+                }
+                else
+                {
+                    StatusDataGrid.Columns.Add(new DataGridTextColumn
+                    {
+                        Header = column.Name,
+                        Binding = new System.Windows.Data.Binding(column.Name.Replace(" ", ""))
+                    });
+                }
             }
         }
 
@@ -409,9 +421,11 @@ namespace IPProcessingTool
             var stopwatch = Stopwatch.StartNew();
             var (pingSuccess, pingTime) = await PingHostAsync(ip, cancellationToken);
 
+            scanStatus.PingTime = pingSuccess ? pingTime : -1;
+
             if (pingSuccess)
             {
-                scanStatus.Status = $"Reachable ({pingTime} ms)";
+                scanStatus.Status = "Reachable";
 
                 // Get MAC Address
                 scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
@@ -431,73 +445,49 @@ namespace IPProcessingTool
                     var tasks = new List<Task>();
 
                     if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Type")))
-                    {
                         tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine SKU"))
-                    {
                         tasks.Add(GetMachineSKUAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
-                    {
                         tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Installed Core Software"))
-                    {
                         tasks.Add(GetInstalledSoftwareAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
-                    {
                         tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Windows Version" || c.Name == "Windows Release")))
-                    {
                         tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
-                    {
                         tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space" || c.Name == "Other Drives")))
-                    {
                         tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
-                    }
 
-                    // Wait for all tasks to complete or timeout
-                    var timeoutTask = Task.Delay(TimeSpan.FromSeconds(executionTimeLimit), cancellationToken);
-                    var completedTask = await Task.WhenAny(Task.WhenAll(tasks), timeoutTask);
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(executionTimeLimit));
 
-                    if (completedTask == timeoutTask)
+                    try
                     {
-                        // Timeout occurred
-                        scanStatus.Status = "Partial";
-                        scanStatus.Details = $"Some data retrieval operations timed out after {executionTimeLimit} seconds";
-
-                        // Set timed out for incomplete fields
-                        SetTimedOutForIncompleteFields(scanStatus);
-                    }
-                    else
-                    {
-                        // All tasks completed before the timeout
-                        await Task.WhenAll(tasks);
+                        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(executionTimeLimit), timeoutCts.Token);
                         scanStatus.Status = "Complete";
                     }
-
-                    stopwatch.Stop();
-                    var totalTime = stopwatch.ElapsedMilliseconds;
-                    scanStatus.Details += $" Total processing time: {totalTime} ms";
+                    catch (OperationCanceledException)
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            scanStatus.Status = "Cancelled";
+                            scanStatus.Details = "Operation was cancelled by user";
+                        }
+                        else
+                        {
+                            scanStatus.Status = "Partial";
+                            scanStatus.Details = $"Some data retrieval operations timed out after {executionTimeLimit} seconds";
+                            SetTimedOutForIncompleteFields(scanStatus);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
                     Logger.Log(LogLevel.WARNING, $"Failed to process IP {ip}. Error: {ex.Message}", context: "ProcessIPInternalAsync");
-                    scanStatus.Status = $"Error";
+                    scanStatus.Status = "Error";
                     scanStatus.Details = $"Failed to retrieve data: {ex.Message}";
                 }
             }
@@ -508,7 +498,8 @@ namespace IPProcessingTool
                 Logger.Log(LogLevel.WARNING, $"Host not reachable for IP {ip}", context: "ProcessIPInternalAsync");
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            stopwatch.Stop();
+            scanStatus.Details += $" Total processing time: {stopwatch.ElapsedMilliseconds} ms";
         }
 
         private void SetTimedOutForIncompleteFields(ScanStatus scanStatus)
@@ -747,7 +738,7 @@ namespace IPProcessingTool
             catch (OperationCanceledException)
             {
                 Logger.Log(LogLevel.INFO, $"Ping operation cancelled for IP {ip}", context: "PingHostAsync");
-                throw; // Re-throw the cancellation exception to be handled by the caller
+                throw;
             }
             catch (Exception ex)
             {
@@ -1159,6 +1150,7 @@ namespace IPProcessingTool
     {
         public string IPAddress { get; set; }
         public string Hostname { get; set; }
+        public long PingTime { get; set; } // in milliseconds
         public string LastLoggedUser { get; set; }
         public string MachineType { get; set; }
         public string MachineSKU { get; set; }
@@ -1180,6 +1172,7 @@ namespace IPProcessingTool
         {
             IPAddress = "";
             Hostname = "N/A";
+            PingTime = -1; // -1 indicates no ping response
             LastLoggedUser = "N/A";
             MachineType = "N/A";
             MachineSKU = "N/A";

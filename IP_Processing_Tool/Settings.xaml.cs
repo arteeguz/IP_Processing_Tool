@@ -23,7 +23,7 @@ namespace IPProcessingTool
             DataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, IsSelected = c.IsSelected }));
             DataColumnsList.ItemsSource = DataColumns;
             AutoSave = autoSave;
-            PingTimeout = pingTimeout;
+            PingTimeout = pingTimeout == 0 ? 3000 : pingTimeout; // Use 3000ms if not set
             MaxConcurrentScans = maxConcurrentScans;
             ExecutionTimeLimit = executionTimeLimit;
 
