@@ -11,16 +11,12 @@ namespace IPProcessingTool
         public bool AutoSave { get; set; }
         public int PingTimeout { get; set; }
         public int MaxConcurrentScans { get; set; }
-        public int IndividualScanTimeout { get; set; }
-        public int WmiOperationTimeout { get; set; }
-        public double ScanCompletionThreshold { get; set; }
-        public int FinalWaitTime { get; set; }
+        public int ExecutionTimeLimit { get; set; }
         public bool DataRetrievalOptionsChanged { get; private set; }
 
         private ObservableCollection<ColumnSetting> originalDataColumns;
 
-        public Settings(ObservableCollection<ColumnSetting> currentDataColumns, bool autoSave, int pingTimeout, int maxConcurrentScans,
-                        int individualScanTimeout, int wmiOperationTimeout, double scanCompletionThreshold, int finalWaitTime)
+        public Settings(ObservableCollection<ColumnSetting> currentDataColumns, bool autoSave, int pingTimeout, int maxConcurrentScans, int executionTimeLimit)
         {
             InitializeComponent();
             originalDataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns);
@@ -29,18 +25,12 @@ namespace IPProcessingTool
             AutoSave = autoSave;
             PingTimeout = pingTimeout;
             MaxConcurrentScans = maxConcurrentScans;
-            IndividualScanTimeout = individualScanTimeout;
-            WmiOperationTimeout = wmiOperationTimeout;
-            ScanCompletionThreshold = scanCompletionThreshold;
-            FinalWaitTime = finalWaitTime;
+            ExecutionTimeLimit = executionTimeLimit;
 
             AutoSaveCheckBox.IsChecked = AutoSave;
             PingTimeoutTextBox.Text = PingTimeout.ToString();
             MaxConcurrentScansTextBox.Text = MaxConcurrentScans.ToString();
-            IndividualScanTimeoutTextBox.Text = IndividualScanTimeout.ToString();
-            WmiOperationTimeoutTextBox.Text = WmiOperationTimeout.ToString();
-            ScanCompletionThresholdTextBox.Text = ScanCompletionThreshold.ToString();
-            FinalWaitTimeTextBox.Text = FinalWaitTime.ToString();
+            ExecutionTimeLimitTextBox.Text = ExecutionTimeLimit.ToString();
         }
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -50,10 +40,7 @@ namespace IPProcessingTool
                 AutoSave = AutoSaveCheckBox.IsChecked ?? false;
                 PingTimeout = int.Parse(PingTimeoutTextBox.Text);
                 MaxConcurrentScans = int.Parse(MaxConcurrentScansTextBox.Text);
-                IndividualScanTimeout = int.Parse(IndividualScanTimeoutTextBox.Text);
-                WmiOperationTimeout = int.Parse(WmiOperationTimeoutTextBox.Text);
-                ScanCompletionThreshold = double.Parse(ScanCompletionThresholdTextBox.Text);
-                FinalWaitTime = int.Parse(FinalWaitTimeTextBox.Text);
+                ExecutionTimeLimit = int.Parse(ExecutionTimeLimitTextBox.Text);
 
                 // Check if data retrieval options have changed
                 DataRetrievalOptionsChanged = HasDataRetrievalOptionsChanged();
@@ -81,24 +68,9 @@ namespace IPProcessingTool
                 MessageBox.Show("Please enter a valid positive integer for Max Concurrent Scans.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
-            if (!int.TryParse(IndividualScanTimeoutTextBox.Text, out int individualScanTimeout) || individualScanTimeout <= 0)
+            if (!int.TryParse(ExecutionTimeLimitTextBox.Text, out int executionTimeLimit) || executionTimeLimit <= 0)
             {
-                MessageBox.Show("Please enter a valid positive integer for Individual Scan Timeout.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return false;
-            }
-            if (!int.TryParse(WmiOperationTimeoutTextBox.Text, out int wmiOperationTimeout) || wmiOperationTimeout <= 0)
-            {
-                MessageBox.Show("Please enter a valid positive integer for WMI Operation Timeout.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return false;
-            }
-            if (!double.TryParse(ScanCompletionThresholdTextBox.Text, out double scanCompletionThreshold) || scanCompletionThreshold <= 0 || scanCompletionThreshold > 1)
-            {
-                MessageBox.Show("Please enter a valid number between 0 and 1 for Scan Completion Threshold.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return false;
-            }
-            if (!int.TryParse(FinalWaitTimeTextBox.Text, out int finalWaitTime) || finalWaitTime <= 0)
-            {
-                MessageBox.Show("Please enter a valid positive integer for Final Wait Time.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("Please enter a valid positive integer for Execution Time Limit per IP.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
             return true;

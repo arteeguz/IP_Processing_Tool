@@ -6,16 +6,13 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net;
-using System.Net.Mail;
 using System.Net.NetworkInformation;
-using System.Net.Security;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using IP_Processing_Tool;
 using Microsoft.Win32;
 
 namespace IPProcessingTool
@@ -28,13 +25,10 @@ namespace IPProcessingTool
         private ParallelOptions parallelOptions;
         private ObservableCollection<ColumnSetting> dataColumnSettings;
         private bool autoSave;
-        private int pingTimeout = 1000; // Default value
+        private int pingTimeout = 1000; // Default value in milliseconds
         private int totalIPs;
         private int processedIPs;
-        private int individualScanTimeout = 30; // Default value in seconds
-        private int wmiOperationTimeout = 10; // Default value in seconds
-        private double scanCompletionThreshold = 0.95; // Default value
-        private int finalWaitTime = 60; // Default value in seconds
+        private int executionTimeLimit = 45; // Default value in seconds
         private const int BATCH_SIZE = 50;
         private List<ScanStatus> _batch = new List<ScanStatus>();
 
@@ -98,18 +92,14 @@ namespace IPProcessingTool
 
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
-            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, parallelOptions.MaxDegreeOfParallelism,
-                                              individualScanTimeout, wmiOperationTimeout, scanCompletionThreshold, finalWaitTime);
+            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, parallelOptions.MaxDegreeOfParallelism, executionTimeLimit);
             if (settingsWindow.ShowDialog() == true)
             {
                 dataColumnSettings = new ObservableCollection<ColumnSetting>(settingsWindow.DataColumns);
                 autoSave = settingsWindow.AutoSave;
                 pingTimeout = settingsWindow.PingTimeout;
                 parallelOptions.MaxDegreeOfParallelism = settingsWindow.MaxConcurrentScans;
-                individualScanTimeout = settingsWindow.IndividualScanTimeout;
-                wmiOperationTimeout = settingsWindow.WmiOperationTimeout;
-                scanCompletionThreshold = settingsWindow.ScanCompletionThreshold;
-                finalWaitTime = settingsWindow.FinalWaitTime;
+                executionTimeLimit = settingsWindow.ExecutionTimeLimit;
 
                 UpdateDataGridColumns();
 
@@ -125,6 +115,110 @@ namespace IPProcessingTool
             }
         }
 
+        private async Task ProcessIPsAsync(IEnumerable<string> ips)
+        {
+            totalIPs = ips.Count();
+            processedIPs = 0;
+            UpdateProgressBar(0);
+
+            DisableButtons();
+
+            cancellationTokenSource = new CancellationTokenSource();
+            var segmentSemaphore = new SemaphoreSlim(Math.Max(1, parallelOptions.MaxDegreeOfParallelism / 4)); // Limit segments
+            var ipSemaphore = new SemaphoreSlim(parallelOptions.MaxDegreeOfParallelism);
+
+            try
+            {
+                var progress = new Progress<int>(value =>
+                {
+                    UpdateProgressBar(value);
+                    StatusDataGrid.Items.Refresh();
+                });
+
+                var ipBatches = ips.Chunk(256); // Assuming each segment has 256 IPs
+                var batchTasks = new List<Task>();
+
+                foreach (var batch in ipBatches)
+                {
+                    await segmentSemaphore.WaitAsync(cancellationTokenSource.Token);
+                    batchTasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var batchResults = new List<ScanStatus>();
+                            foreach (var ip in batch)
+                            {
+                                await ipSemaphore.WaitAsync(cancellationTokenSource.Token);
+                                try
+                                {
+                                    if (IsValidIP(ip))
+                                    {
+                                        var result = await ProcessIPAsync(ip, cancellationTokenSource.Token);
+                                        if (result != null)
+                                        {
+                                            lock (batchResults)
+                                            {
+                                                batchResults.Add(result);
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        HighlightInvalidInput(ip);
+                                    }
+                                }
+                                finally
+                                {
+                                    ipSemaphore.Release();
+                                }
+                            }
+
+                            // Update UI in batches
+                            await Dispatcher.InvokeAsync(() =>
+                            {
+                                foreach (var result in batchResults)
+                                {
+                                    UpdateScanStatus(result);
+                                }
+                            });
+
+                            Interlocked.Add(ref processedIPs, batch.Length);
+                            ((IProgress<int>)progress).Report((int)((double)processedIPs / totalIPs * 100));
+                        }
+                        finally
+                        {
+                            segmentSemaphore.Release();
+                        }
+                    }, cancellationTokenSource.Token));
+                }
+
+                await Task.WhenAll(batchTasks);
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Log(LogLevel.INFO, "Scan operation was cancelled", context: "ProcessIPsAsync");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, "Error processing IPs", context: "ProcessIPsAsync", additionalInfo: ex.Message);
+                MessageBox.Show($"An error occurred while processing IPs: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                EnableButtons();
+                UpdateStatusBar("Completed processing all IPs.");
+                UpdateProgressBar(100);
+
+                // Force a final update of the DataGrid
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    StatusDataGrid.Items.Refresh();
+                });
+
+                HandleAutoSave();
+            }
+        }
+
         private async void RescanPreviousIPs()
         {
             var ips = ScanStatuses.Select(s => s.IPAddress).ToList();
@@ -132,7 +226,6 @@ namespace IPProcessingTool
             await ProcessIPsAsync(ips);
         }
 
-        // Add a new button to the UI for manual rescan
         private void RescanButton_Click(object sender, RoutedEventArgs e)
         {
             if (ScanStatuses.Count > 0)
@@ -210,13 +303,10 @@ namespace IPProcessingTool
                     if (ex.Message.Contains("being used by another process"))
                     {
                         MessageBox.Show("The file is currently being used by another process. Please close the file and try again.", "File Access Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        //Logger.Log(LogLever.ERROR, "File access error: The file is being used by another process.", content: "Button2_Click", additionalInfo: csvPath);
-
                     }
                     else
                     {
                         MessageBox.Show($"An error occurred while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        //Logger.Log(LogLever.ERROR, $"File access error: {ex.Message}", Content: "Button2_Click", additionalInfo: csvPath);
                     }
                 }
             }
@@ -266,99 +356,6 @@ namespace IPProcessingTool
             }
         }
 
-
-        private async Task ProcessIPsAsync(IEnumerable<string> ips)
-        {
-            totalIPs = ips.Count();
-            processedIPs = 0;
-            UpdateProgressBar(0);
-
-            DisableButtons();
-
-            cancellationTokenSource = new CancellationTokenSource();
-            var semaphore = new SemaphoreSlim(parallelOptions.MaxDegreeOfParallelism);
-
-            try
-            {
-                var progress = new Progress<int>(value =>
-                {
-                    UpdateProgressBar(value);
-                    StatusDataGrid.Items.Refresh();
-                });
-
-                var ipBatches = ips.Chunk(BATCH_SIZE);
-                foreach (var batch in ipBatches)
-                {
-                    var tasks = batch.Select(async ip =>
-                    {
-                        await semaphore.WaitAsync(cancellationTokenSource.Token);
-                        try
-                        {
-                            if (IsValidIP(ip))
-                            {
-                                return await ProcessIPAsync(ip, cancellationTokenSource.Token);
-                            }
-                            else
-                            {
-                                HighlightInvalidInput(ip);
-                                return null;
-                            }
-                        }
-                        finally
-                        {
-                            semaphore.Release();
-                        }
-                    });
-
-                    var results = await Task.WhenAll(tasks);
-
-                    lock (ScanStatuses)
-                    {
-                        foreach (var result in results.Where(r => r != null))
-                        {
-                            UpdateScanStatus(result);
-                        }
-                    }
-
-                    processedIPs += batch.Length;
-                    ((IProgress<int>)progress).Report((int)((double)processedIPs / totalIPs * 100));
-
-                    if (processedIPs >= totalIPs * scanCompletionThreshold)
-                    {
-                        break;
-                    }
-
-                    cancellationTokenSource.Token.ThrowIfCancellationRequested();
-                }
-
-                // Wait for the final wait time for any remaining tasks
-                await Task.Delay(TimeSpan.FromSeconds(finalWaitTime));
-            }
-            catch (OperationCanceledException)
-            {
-                Logger.Log(LogLevel.INFO, "Scan operation was cancelled", context: "ProcessIPsAsync");
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, "Error processing IPs", context: "ProcessIPsAsync", additionalInfo: ex.Message);
-                MessageBox.Show($"An error occurred while processing IPs: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                EnableButtons();
-                UpdateStatusBar("Completed processing all IPs.");
-                UpdateProgressBar(100);
-
-                // Force a final update of the DataGrid
-                Dispatcher.Invoke(() =>
-                {
-                    StatusDataGrid.Items.Refresh();
-                });
-
-                HandleAutoSave();
-            }
-        }
-
         private async Task<ScanStatus> ProcessIPAsync(string ip, CancellationToken cancellationToken = default)
         {
             var scanStatus = new ScanStatus
@@ -378,10 +375,10 @@ namespace IPProcessingTool
             try
             {
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(individualScanTimeout));
+                cts.CancelAfter(TimeSpan.FromSeconds(executionTimeLimit));
 
                 var processingTask = ProcessIPInternalAsync(ip, scanStatus, cts.Token);
-                await processingTask.WaitAsync(TimeSpan.FromSeconds(individualScanTimeout), cts.Token);
+                await processingTask.WaitAsync(TimeSpan.FromSeconds(executionTimeLimit), cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -423,11 +420,10 @@ namespace IPProcessingTool
                 {
                     Impersonation = ImpersonationLevel.Impersonate,
                     EnablePrivileges = true,
-                    Authentication = System.Management.AuthenticationLevel.PacketPrivacy,
-                    Timeout = TimeSpan.FromSeconds(wmiOperationTimeout)
+                    Authentication = AuthenticationLevel.PacketPrivacy
                 };
 
-                var scope = new System.Management.ManagementScope($"\\\\{ip}\\root\\cimv2", options);
+                var scope = new ManagementScope($"\\\\{ip}\\root\\cimv2", options);
                 try
                 {
                     await Task.Run(() => scope.Connect(), cancellationToken);
@@ -474,24 +470,35 @@ namespace IPProcessingTool
                         tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
                     }
 
-                    await Task.WhenAll(tasks);
+                    // Wait for all tasks to complete or timeout
+                    var timeoutTask = Task.Delay(TimeSpan.FromSeconds(executionTimeLimit), cancellationToken);
+                    var completedTask = await Task.WhenAny(Task.WhenAll(tasks), timeoutTask);
+
+                    if (completedTask == timeoutTask)
+                    {
+                        // Timeout occurred
+                        scanStatus.Status = "Partial";
+                        scanStatus.Details = $"Some data retrieval operations timed out after {executionTimeLimit} seconds";
+
+                        // Set timed out for incomplete fields
+                        SetTimedOutForIncompleteFields(scanStatus);
+                    }
+                    else
+                    {
+                        // All tasks completed before the timeout
+                        await Task.WhenAll(tasks);
+                        scanStatus.Status = "Complete";
+                    }
 
                     stopwatch.Stop();
                     var totalTime = stopwatch.ElapsedMilliseconds;
-                    scanStatus.Status = $"Complete ({pingTime} ms)";
-                    scanStatus.Details = $"Total processing time: {totalTime} ms";
-                }
-                catch (COMException ex) when (ex.Message.Contains("The RPC server is unavailable"))
-                {
-                    Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. RPC server unavailable. Moving on. Error: {ex.Message}", context: "ProcessIPInternalAsync");
-                    scanStatus.Status = $"Partial ({pingTime} ms)";
-                    scanStatus.Details = "The RPC server is unavailable. Some data may be incomplete.";
+                    scanStatus.Details += $" Total processing time: {totalTime} ms";
                 }
                 catch (Exception ex)
                 {
-                    Logger.Log(LogLevel.WARNING, $"Failed to connect to IP {ip}. Moving on. Error: {ex.Message}", context: "ProcessIPInternalAsync");
-                    scanStatus.Status = $"Partial ({pingTime} ms)";
-                    scanStatus.Details = "Failed to retrieve all data. Some information may be incomplete.";
+                    Logger.Log(LogLevel.WARNING, $"Failed to process IP {ip}. Error: {ex.Message}", context: "ProcessIPInternalAsync");
+                    scanStatus.Status = $"Error";
+                    scanStatus.Details = $"Failed to retrieve data: {ex.Message}";
                 }
             }
             else
@@ -504,14 +511,42 @@ namespace IPProcessingTool
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        private async Task GetComputerSystemInfoAsync(System.Management.ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        private void SetTimedOutForIncompleteFields(ScanStatus scanStatus)
+        {
+            if (string.IsNullOrEmpty(scanStatus.Hostname) || scanStatus.Hostname == "N/A")
+                scanStatus.Hostname = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.LastLoggedUser) || scanStatus.LastLoggedUser == "N/A")
+                scanStatus.LastLoggedUser = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.MachineType) || scanStatus.MachineType == "N/A")
+                scanStatus.MachineType = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.MachineSKU) || scanStatus.MachineSKU == "N/A")
+                scanStatus.MachineSKU = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.InstalledCoreSoftware) || scanStatus.InstalledCoreSoftware == "N/A")
+                scanStatus.InstalledCoreSoftware = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.RAMSize) || scanStatus.RAMSize == "N/A")
+                scanStatus.RAMSize = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.WindowsVersion) || scanStatus.WindowsVersion == "N/A")
+                scanStatus.WindowsVersion = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.WindowsRelease) || scanStatus.WindowsRelease == "N/A")
+                scanStatus.WindowsRelease = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.MicrosoftOfficeVersion) || scanStatus.MicrosoftOfficeVersion == "N/A")
+                scanStatus.MicrosoftOfficeVersion = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.DiskSize) || scanStatus.DiskSize == "N/A")
+                scanStatus.DiskSize = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.DiskFreeSpace) || scanStatus.DiskFreeSpace == "N/A")
+                scanStatus.DiskFreeSpace = "Timed Out";
+            if (string.IsNullOrEmpty(scanStatus.OtherDrives) || scanStatus.OtherDrives == "N/A")
+                scanStatus.OtherDrives = "Timed Out";
+        }
+
+        private async Task GetComputerSystemInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
             try
             {
-                var machineQuery = new System.Management.ObjectQuery("SELECT Name, Model FROM Win32_ComputerSystem");
-                using (var machineSearcher = new System.Management.ManagementObjectSearcher(scope, machineQuery))
+                var machineQuery = new ObjectQuery("SELECT Name, Model FROM Win32_ComputerSystem");
+                using (var machineSearcher = new ManagementObjectSearcher(scope, machineQuery))
                 {
-                    var machine = await Task.Run(() => machineSearcher.Get().Cast<System.Management.ManagementObject>().FirstOrDefault(), cancellationToken);
+                    var machine = await Task.Run(() => machineSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
                     if (machine != null)
                     {
                         if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Hostname"))
@@ -622,59 +657,81 @@ namespace IPProcessingTool
 
         private async Task GetOfficeVersionAsync(string machineName, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
+            string officeVersion = "Not Installed";
+            string registryPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+            string[] officeKeywords = new[] { "Microsoft Office", "Office 365", "Microsoft 365" };
+
             try
             {
-                string officeVersion = "Not Installed";
-                string registryPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
-                string[] officeKeywords = new[] { "Microsoft Office", "Office 365", "Microsoft 365" };
-
-                using (RegistryKey baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, machineName))
-                using (RegistryKey uninstallKey = baseKey.OpenSubKey(registryPath))
+                await Task.Run(() =>
                 {
-                    if (uninstallKey != null)
+                    try
                     {
-                        foreach (string subKeyName in uninstallKey.GetSubKeyNames())
+                        using (RegistryKey baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, machineName))
+                        using (RegistryKey uninstallKey = baseKey.OpenSubKey(registryPath))
                         {
-                            using (RegistryKey officeKey = uninstallKey.OpenSubKey(subKeyName))
+                            if (uninstallKey != null)
                             {
-                                if (officeKey != null)
+                                foreach (string subKeyName in uninstallKey.GetSubKeyNames())
                                 {
-                                    string displayName = officeKey.GetValue("DisplayName") as string;
-                                    string displayVersion = officeKey.GetValue("DisplayVersion") as string;
+                                    cancellationToken.ThrowIfCancellationRequested();
 
-                                    if (!string.IsNullOrEmpty(displayName) && !string.IsNullOrEmpty(displayVersion))
+                                    using (RegistryKey officeKey = uninstallKey.OpenSubKey(subKeyName))
                                     {
-                                        if (officeKeywords.Any(keyword => displayName.Contains(keyword, StringComparison.OrdinalIgnoreCase)) &&
-                                            !displayName.Contains("Runtime", StringComparison.OrdinalIgnoreCase) &&
-                                            !displayName.Contains("Tools", StringComparison.OrdinalIgnoreCase))
+                                        if (officeKey != null)
                                         {
-                                            officeVersion = $"{displayName} ({displayVersion})";
+                                            string displayName = officeKey.GetValue("DisplayName") as string;
+                                            string displayVersion = officeKey.GetValue("DisplayVersion") as string;
 
-                                            // Determine specific version if not clear from displayName
-                                            if (!displayName.Contains("365") && !displayName.Contains("2013") && !displayName.Contains("2016") && !displayName.Contains("2019"))
+                                            if (!string.IsNullOrEmpty(displayName) && !string.IsNullOrEmpty(displayVersion))
                                             {
-                                                if (displayVersion.StartsWith("15."))
-                                                    officeVersion += " (Office 2013)";
-                                                else if (displayVersion.StartsWith("16."))
-                                                    officeVersion += " (Office 2016 or newer)";
-                                            }
+                                                if (officeKeywords.Any(keyword => displayName.Contains(keyword, StringComparison.OrdinalIgnoreCase)) &&
+                                                    !displayName.Contains("Runtime", StringComparison.OrdinalIgnoreCase) &&
+                                                    !displayName.Contains("Tools", StringComparison.OrdinalIgnoreCase))
+                                                {
+                                                    officeVersion = $"{displayName} ({displayVersion})";
 
-                                            break;
+                                                    // Determine specific version if not clear from displayName
+                                                    if (!displayName.Contains("365") && !displayName.Contains("2013") && !displayName.Contains("2016") && !displayName.Contains("2019"))
+                                                    {
+                                                        if (displayVersion.StartsWith("15."))
+                                                            officeVersion += " (Office 2013)";
+                                                        else if (displayVersion.StartsWith("16."))
+                                                            officeVersion += " (Office 2016 or newer)";
+                                                    }
+
+                                                    break;
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-
-                scanStatus.MicrosoftOfficeVersion = officeVersion;
+                    catch (System.IO.IOException ex)
+                    {
+                        Logger.Log(LogLevel.WARNING, $"Network error accessing registry for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
+                        officeVersion = "Network Error";
+                    }
+                    catch (System.Security.SecurityException ex)
+                    {
+                        Logger.Log(LogLevel.WARNING, $"Security error accessing registry for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
+                        officeVersion = "Access Denied";
+                    }
+                }, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                officeVersion = "Operation Cancelled";
             }
             catch (Exception ex)
             {
-                Logger.Log(LogLevel.ERROR, $"Error getting Microsoft Office version for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
-                scanStatus.MicrosoftOfficeVersion = "Error";
+                Logger.Log(LogLevel.ERROR, $"Unexpected error getting Microsoft Office version for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
+                officeVersion = "Error";
             }
+
+            scanStatus.MicrosoftOfficeVersion = officeVersion;
         }
 
         private async Task<(bool success, long roundTripTime)> PingHostAsync(string ip, CancellationToken cancellationToken)
@@ -863,7 +920,6 @@ namespace IPProcessingTool
             }
         }
 
-
         private void AddScanStatus(ScanStatus scanStatus)
         {
             Dispatcher.Invoke(() =>
@@ -874,6 +930,7 @@ namespace IPProcessingTool
                 }
             });
         }
+
         private void UpdateScanStatus(ScanStatus scanStatus)
         {
             lock (_batch)
@@ -914,7 +971,6 @@ namespace IPProcessingTool
             Logger.Log(LogLevel.INFO, "Grid data cleared by the user.");
             UpdateStatusBar("Grid cleared.");
         }
-
 
         private bool IsValidIP(string ip)
         {
@@ -1096,23 +1152,6 @@ namespace IPProcessingTool
         {
             var property = typeof(ScanStatus).GetProperty(propertyName);
             return property?.GetValue(scanStatus)?.ToString() ?? "N/A";
-        }
-
-        private void EnsureCsvFile()
-        {
-            try
-            {
-                if (!File.Exists(outputFilePath))
-                {
-                    var header = string.Join(",", dataColumnSettings.Where(c => c.IsSelected).Select(c => $"\"{c.Name}\""));
-                    File.WriteAllText(outputFilePath, header + Environment.NewLine);
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Error ensuring CSV file: {ex.Message}", context: "EnsureCsvFile");
-                MessageBox.Show($"Error ensuring CSV file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
         }
     }
 
