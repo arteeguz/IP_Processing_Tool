@@ -73,13 +73,13 @@
 
         <Button Name="SettingsButton" Content="⚙ Settings" Click="SettingsButton_Click" 
                 Style="{StaticResource SettingsButtonStyle}"
-                    VerticalAlignment="Top" HorizontalAlignment="Right"
-                    Margin="0,20,60,0" Width="88"/>
+                VerticalAlignment="Top" HorizontalAlignment="Right"
+                Margin="0,20,60,0" Width="88"/>
 
         <DataGrid Name="StatusDataGrid" Grid.Row="1" Grid.ColumnSpan="2" Margin="20,221,20,10" 
                   AutoGenerateColumns="False" IsReadOnly="True" CanUserResizeColumns="True"
                   SelectionMode="Extended" SelectionUnit="FullRow">
-            <!-- Add your DataGrid.Columns here -->
+            <!-- DataGrid columns are dynamically generated in code-behind -->
         </DataGrid>
         <ProgressBar Name="ProgressBar" Grid.Row="2" Height="20" Margin="10"/>
 
@@ -122,6 +122,5 @@
             Style="{StaticResource MainButtonStyle}" Width="100" Height="32"/>
             </StatusBarItem>
         </StatusBar>
-
     </Grid>
 </Window>
