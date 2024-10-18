@@ -56,26 +56,25 @@ namespace IPProcessingTool
         private void InitializeColumnSettings()
         {
             dataColumnSettings = new ObservableCollection<ColumnSetting>
-    {
-        new ColumnSetting { Name = "IP Address", IsSelected = true },
-        new ColumnSetting { Name = "MAC Address", IsSelected = true },
-        new ColumnSetting { Name = "Hostname", IsSelected = true },
-        new ColumnSetting { Name = "Last Logged User", IsSelected = false },
-        new ColumnSetting { Name = "Machine Model", IsSelected = false },
-        new ColumnSetting { Name = "Disk Size", IsSelected = true },
-        new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
-        new ColumnSetting { Name = "Other Drives", IsSelected = true },
-        new ColumnSetting { Name = "Installed Core Software", IsSelected = false },
-        new ColumnSetting { Name = "RAM Size", IsSelected = false },
-        new ColumnSetting { Name = "Windows Version", IsSelected = false },
-        new ColumnSetting { Name = "Windows Release", IsSelected = false },
-        new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
-        new ColumnSetting { Name = "Date", IsSelected = true },
-        new ColumnSetting { Name = "Time", IsSelected = true },
-        new ColumnSetting { Name = "Ping Time", IsSelected = true },
-        new ColumnSetting { Name = "Status", IsSelected = true },
-        new ColumnSetting { Name = "Details", IsSelected = true }
-    };
+            {
+                new ColumnSetting { Name = "IP Address", IsSelected = true },
+                new ColumnSetting { Name = "MAC Address", IsSelected = true },
+                new ColumnSetting { Name = "Hostname", IsSelected = true },
+                new ColumnSetting { Name = "Last Logged User", IsSelected = false },
+                new ColumnSetting { Name = "Machine Model", IsSelected = false },
+                new ColumnSetting { Name = "Disk Size", IsSelected = true },
+                new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
+                new ColumnSetting { Name = "Other Drives", IsSelected = true },
+                new ColumnSetting { Name = "RAM Size", IsSelected = false },
+                new ColumnSetting { Name = "Windows Version", IsSelected = false },
+                new ColumnSetting { Name = "Windows Release", IsSelected = false },
+                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
+                new ColumnSetting { Name = "Date", IsSelected = true },
+                new ColumnSetting { Name = "Time", IsSelected = true },
+                new ColumnSetting { Name = "Ping Time", IsSelected = true },
+                new ColumnSetting { Name = "Status", IsSelected = true },
+                new ColumnSetting { Name = "Details", IsSelected = true }
+            };
         }
 
         private void UpdateDataGridColumns()
@@ -405,11 +404,6 @@ namespace IPProcessingTool
                         tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
                     }
 
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Installed Core Software"))
-                    {
-                        tasks.Add(GetInstalledSoftwareAsync(scope, scanStatus, cancellationToken));
-                    }
-
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
                     {
                         tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
@@ -492,24 +486,6 @@ namespace IPProcessingTool
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting last logged user: {ex.Message}", context: "GetLastLoggedUserAsync");
-            }
-        }
-
-        private async Task GetInstalledSoftwareAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
-        {
-            try
-            {
-                var softwareQuery = new ObjectQuery("SELECT Name, Version FROM Win32_Product");
-                using var softwareSearcher = new ManagementObjectSearcher(scope, softwareQuery);
-                var softwareList = await Task.Run(() => softwareSearcher.Get().Cast<ManagementObject>()
-                    .Select(soft => $"{soft["Name"]} ({soft["Version"]})")
-                    .Take(10)
-                    .ToList(), cancellationToken);
-                scanStatus.InstalledCoreSoftware = string.Join(", ", softwareList);
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Error getting installed software: {ex.Message}", context: "GetInstalledSoftwareAsync");
             }
         }
 
@@ -1000,7 +976,6 @@ namespace IPProcessingTool
             public string Hostname { get; set; }
             public string LastLoggedUser { get; set; }
             public string MachineModel { get; set; }
-            public string InstalledCoreSoftware { get; set; }
             public string RAMSize { get; set; }
             public string WindowsVersion { get; set; }
             public string WindowsRelease { get; set; }
@@ -1021,7 +996,6 @@ namespace IPProcessingTool
                 Hostname = "N/A";
                 LastLoggedUser = "N/A";
                 MachineModel = "N/A";
-                InstalledCoreSoftware = "N/A";
                 RAMSize = "N/A";
                 WindowsVersion = "N/A";
                 WindowsRelease = "N/A";
