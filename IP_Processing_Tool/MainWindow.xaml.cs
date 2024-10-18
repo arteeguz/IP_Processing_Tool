@@ -76,7 +76,10 @@ namespace IPProcessingTool
         new ColumnSetting { Name = "Time", IsSelected = true },
         new ColumnSetting { Name = "Ping Time", IsSelected = true },
         new ColumnSetting { Name = "Status", IsSelected = true },
-        new ColumnSetting { Name = "Details", IsSelected = true }
+        new ColumnSetting { Name = "Details", IsSelected = true },
+        new ColumnSetting { Name = "NIC 0 LAN", IsSelected = true },
+        new ColumnSetting { Name = "NIC 1 WiFi", IsSelected = true },
+        new ColumnSetting { Name = "NIC 2 LAN 2", IsSelected = true },
     };
         }
 
@@ -437,6 +440,11 @@ namespace IPProcessingTool
                                 tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
                             }
 
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "NIC 0 LAN" || c.Name == "NIC 1 WiFi" || c.Name == "NIC 2 LAN 2")))
+                            {
+                                tasks.Add(GetNetworkAdaptersInfoAsync(scope, scanStatus, cancellationToken));
+                            }
+
                             await Task.WhenAll(tasks);
 
                             scanStatus.Status = "Complete";
@@ -585,9 +593,6 @@ namespace IPProcessingTool
                 scanStatus.EmbeddedControllerVersion = "Error";
             }
         }
-
-
-
 
         private async Task GetLastLoggedUserAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
@@ -870,6 +875,58 @@ namespace IPProcessingTool
             }
         }
 
+        private async Task GetNetworkAdaptersInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var query = new ObjectQuery("SELECT * FROM Win32_NetworkAdapter WHERE PhysicalAdapter=True AND NetEnabled=True");
+                using var searcher = new ManagementObjectSearcher(scope, query);
+                var adapters = await Task.Run(() => searcher.Get(), cancellationToken);
+
+                int lanCount = 0;
+                int wifiCount = 0;
+
+                foreach (ManagementObject adapter in adapters)
+                {
+                    string adapterType = adapter["AdapterType"]?.ToString() ?? "";
+                    string name = adapter["Name"]?.ToString() ?? "Unknown";
+                    string macAddress = adapter["MACAddress"]?.ToString() ?? "N/A";
+                    string speed = adapter["Speed"] != null ? $"{Convert.ToInt64(adapter["Speed"]) / 1000000} Mbps" : "N/A";
+
+                    if (adapterType.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (lanCount == 0)
+                            scanStatus.NIC0LAN = $"{name} | MAC: {macAddress} | Speed: {speed}";
+                        else if (lanCount == 1)
+                            scanStatus.NIC2LAN2 = $"{name} | MAC: {macAddress} | Speed: {speed}";
+                        lanCount++;
+                    }
+                    else if (adapterType.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
+                             name.Contains("WiFi", StringComparison.OrdinalIgnoreCase) ||
+                             name.Contains("Wireless", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (wifiCount == 0)
+                            scanStatus.NIC1WiFi = $"{name} | MAC: {macAddress} | Speed: {speed}";
+                        wifiCount++;
+                    }
+
+                    if (lanCount >= 2 && wifiCount >= 1) break; // We have all we need
+                }
+
+                // Set "Not Present" for any adapters not found
+                if (string.IsNullOrEmpty(scanStatus.NIC0LAN)) scanStatus.NIC0LAN = "Not Present";
+                if (string.IsNullOrEmpty(scanStatus.NIC1WiFi)) scanStatus.NIC1WiFi = "Not Present";
+                if (string.IsNullOrEmpty(scanStatus.NIC2LAN2)) scanStatus.NIC2LAN2 = "Not Present";
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting network adapters info: {ex.Message}", context: "GetNetworkAdaptersInfoAsync");
+                scanStatus.NIC0LAN = "Error retrieving data";
+                scanStatus.NIC1WiFi = "Error retrieving data";
+                scanStatus.NIC2LAN2 = "Error retrieving data";
+            }
+        }
+
         private void UpdateScanStatus(ScanStatus scanStatus)
         {
             Dispatcher.Invoke(() =>
@@ -1091,6 +1148,9 @@ namespace IPProcessingTool
             public string BIOSVersionDate { get; set; }
             public string SMBIOSVersion { get; set; }
             public string EmbeddedControllerVersion { get; set; }
+            public string NIC0LAN { get; set; }
+            public string NIC1WiFi { get; set; }
+            public string NIC2LAN2 { get; set; }
 
             public ScanStatus()
             {
@@ -1113,6 +1173,9 @@ namespace IPProcessingTool
                 BIOSVersionDate = "N/A";
                 SMBIOSVersion = "N/A";
                 EmbeddedControllerVersion = "N/A";
+                NIC0LAN = "N/A";
+                NIC1WiFi = "N/A";
+                NIC2LAN2 = "N/A";
             }
         }
     }
