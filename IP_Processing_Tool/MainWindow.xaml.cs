@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
+using System.Globalization;
 
 namespace IPProcessingTool
 {
@@ -66,8 +67,11 @@ namespace IPProcessingTool
         new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
         new ColumnSetting { Name = "Other Drives", IsSelected = true },
         new ColumnSetting { Name = "RAM Size", IsSelected = false },
-        new ColumnSetting { Name = "Windows Info", IsSelected = true }, // Updated field
+        new ColumnSetting { Name = "Windows Info", IsSelected = true },
         new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
+        new ColumnSetting { Name = "BIOS Version/Date", IsSelected = true },
+        new ColumnSetting { Name = "SMBIOS Version", IsSelected = true },
+        new ColumnSetting { Name = "Embedded Controller Version", IsSelected = true },
         new ColumnSetting { Name = "Date", IsSelected = true },
         new ColumnSetting { Name = "Time", IsSelected = true },
         new ColumnSetting { Name = "Ping Time", IsSelected = true },
@@ -423,6 +427,11 @@ namespace IPProcessingTool
                         tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
                     }
 
+                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "BIOS Version/Date" || c.Name == "SMBIOS Version" || c.Name == "Embedded Controller Version")))
+                    {
+                        tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     await Task.WhenAll(tasks);
 
                     scanStatus.Status = "Complete";
@@ -467,6 +476,51 @@ namespace IPProcessingTool
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting computer system info: {ex.Message}", context: "GetComputerSystemInfoAsync");
+            }
+        }
+
+        private async Task GetBIOSInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var biosQuery = new ObjectQuery("SELECT SMBIOSBIOSVersion, ReleaseDate, SMBIOSMajorVersion, SMBIOSMinorVersion FROM Win32_BIOS");
+                using var biosSearcher = new ManagementObjectSearcher(scope, biosQuery);
+                var bios = await Task.Run(() => biosSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+
+                if (bios != null)
+                {
+                    string biosVersion = bios["SMBIOSBIOSVersion"]?.ToString() ?? "Unknown";
+                    string releaseDate = bios["ReleaseDate"]?.ToString() ?? "Unknown";
+
+                    // Format the date if it's not "Unknown"
+                    if (releaseDate != "Unknown" && DateTime.TryParseExact(releaseDate, "yyyyMMddHHmmss.ffffff+000", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
+                    {
+                        releaseDate = parsedDate.ToString("yyyy-MM-dd");
+                    }
+
+                    scanStatus.BIOSVersionDate = $"{biosVersion} ({releaseDate})";
+
+                    int smbiosMajorVersion = Convert.ToInt32(bios["SMBIOSMajorVersion"]);
+                    int smbiosMinorVersion = Convert.ToInt32(bios["SMBIOSMinorVersion"]);
+                    scanStatus.SMBIOSVersion = $"{smbiosMajorVersion}.{smbiosMinorVersion}";
+                }
+
+                // Query for Embedded Controller Version
+                var ecQuery = new ObjectQuery("SELECT * FROM Win32_SystemEnclosure");
+                using var ecSearcher = new ManagementObjectSearcher(scope, ecQuery);
+                var enclosure = await Task.Run(() => ecSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+
+                if (enclosure != null)
+                {
+                    scanStatus.EmbeddedControllerVersion = enclosure["Version"]?.ToString() ?? "N/A";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting BIOS info: {ex.Message}", context: "GetBIOSInfoAsync");
+                scanStatus.BIOSVersionDate = "Error";
+                scanStatus.SMBIOSVersion = "Error";
+                scanStatus.EmbeddedControllerVersion = "Error";
             }
         }
 
@@ -958,7 +1012,7 @@ namespace IPProcessingTool
             public string LastLoggedUser { get; set; }
             public string MachineModel { get; set; }
             public string RAMSize { get; set; }
-            public string WindowsInfo { get; set; } // New combined field
+            public string WindowsInfo { get; set; }
             public string MicrosoftOfficeVersion { get; set; }
             public string Date { get; set; }
             public string Time { get; set; }
@@ -969,6 +1023,9 @@ namespace IPProcessingTool
             public string DiskFreeSpace { get; set; }
             public string OtherDrives { get; set; }
             public long PingTime { get; set; }
+            public string BIOSVersionDate { get; set; }
+            public string SMBIOSVersion { get; set; }
+            public string EmbeddedControllerVersion { get; set; }
 
             public ScanStatus()
             {
@@ -988,6 +1045,9 @@ namespace IPProcessingTool
                 DiskFreeSpace = "N/A";
                 OtherDrives = "N/A";
                 PingTime = -1;
+                BIOSVersionDate = "N/A";
+                SMBIOSVersion = "N/A";
+                EmbeddedControllerVersion = "N/A";
             }
         }
     }
