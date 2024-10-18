@@ -69,7 +69,7 @@ namespace IPProcessingTool
         new ColumnSetting { Name = "RAM Size", IsSelected = false },
         new ColumnSetting { Name = "Windows Info", IsSelected = true },
         new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
-        new ColumnSetting { Name = "BIOS Version/Date", IsSelected = true },
+        new ColumnSetting { Name = "BIOS Version Date", IsSelected = true },
         new ColumnSetting { Name = "SMBIOS Version", IsSelected = true },
         new ColumnSetting { Name = "Embedded Controller Version", IsSelected = true },
         new ColumnSetting { Name = "Date", IsSelected = true },
@@ -432,7 +432,7 @@ namespace IPProcessingTool
                                 tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
                             }
 
-                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "BIOS Version/Date" || c.Name == "SMBIOS Version" || c.Name == "Embedded Controller Version")))
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "BIOS Version Date" || c.Name == "SMBIOS Version" || c.Name == "Embedded Controller Version")))
                             {
                                 tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
                             }
@@ -522,61 +522,72 @@ namespace IPProcessingTool
         {
             try
             {
-                await Task.Run(() =>
+                // Query for BIOS information
+                var biosQuery = new ObjectQuery("SELECT Manufacturer, SMBIOSBIOSVersion, ReleaseDate FROM Win32_BIOS");
+                using var biosSearcher = new ManagementObjectSearcher(scope, biosQuery);
+                var bios = await Task.Run(() => biosSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+
+                if (bios != null)
                 {
-                    try
+                    string manufacturer = bios["Manufacturer"]?.ToString() ?? "Unknown";
+                    string smbiosBiosVersion = bios["SMBIOSBIOSVersion"]?.ToString() ?? "Unknown";
+                    string releaseDate = bios["ReleaseDate"]?.ToString() ?? "Unknown";
+
+                    // Attempt to parse the release date
+                    if (releaseDate != "Unknown" && DateTime.TryParseExact(releaseDate.Split('.')[0], "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
                     {
-                        using (var baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, scope.Path.Server))
-                        using (var biosKey = baseKey.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS"))
-                        {
-                            if (biosKey != null)
-                            {
-                                // BIOS Version/Date
-                                string biosVendor = biosKey.GetValue("BIOSVendor") as string ?? "Unknown";
-                                string biosVersion = biosKey.GetValue("BIOSVersion") as string ?? "Unknown";
-                                string biosDate = biosKey.GetValue("BIOSReleaseDate") as string ?? "Unknown";
-
-                                // Format the date if it's not "Unknown"
-                                if (biosDate != "Unknown" && DateTime.TryParseExact(biosDate, "MM/dd/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
-                                {
-                                    biosDate = parsedDate.ToString("M/d/yyyy");
-                                }
-
-                                scanStatus.BIOSVersionDate = $"{biosVendor} {biosVersion}, {biosDate}";
-
-                                // SMBIOS Version
-                                string smbiosMajorVersion = biosKey.GetValue("SystemManagementMajorVersion") as string ?? "0";
-                                string smbiosMinorVersion = biosKey.GetValue("SystemManagementMinorVersion") as string ?? "0";
-                                scanStatus.SMBIOSVersion = $"{smbiosMajorVersion}.{smbiosMinorVersion}";
-
-                                // Embedded Controller Version
-                                string ecVersion = biosKey.GetValue("EmbeddedControllerVersion") as string ?? "N/A";
-                                scanStatus.EmbeddedControllerVersion = ecVersion;
-                            }
-                            else
-                            {
-                                throw new Exception("Unable to open BIOS registry key");
-                            }
-                        }
+                        releaseDate = parsedDate.ToString("M/d/yyyy");
                     }
-                    catch (System.IO.IOException ioEx)
-                    {
-                        throw new Exception($"Network error: {ioEx.Message}. Please check network connectivity and ensure the Remote Registry service is running on the target machine.");
-                    }
-                    catch (System.Security.SecurityException secEx)
-                    {
-                        throw new Exception($"Access denied: {secEx.Message}. Please ensure you have sufficient permissions to access the remote registry.");
-                    }
-                }, cancellationToken);
+
+                    scanStatus.BIOSVersionDate = $"{manufacturer}, {smbiosBiosVersion}, {releaseDate}";
+                }
+                else
+                {
+                    scanStatus.BIOSVersionDate = "BIOS information not available";
+                }
+
+                // Query for SMBIOS Version
+                var smbiosQuery = new ObjectQuery("SELECT SMBIOSMajorVersion, SMBIOSMinorVersion FROM Win32_BIOS");
+                using var smbiosSearcher = new ManagementObjectSearcher(scope, smbiosQuery);
+                var smbios = await Task.Run(() => smbiosSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+
+                if (smbios != null)
+                {
+                    int smbiosMajorVersion = Convert.ToInt32(smbios["SMBIOSMajorVersion"]);
+                    int smbiosMinorVersion = Convert.ToInt32(smbios["SMBIOSMinorVersion"]);
+                    scanStatus.SMBIOSVersion = $"{smbiosMajorVersion}.{smbiosMinorVersion}";
+                }
+                else
+                {
+                    scanStatus.SMBIOSVersion = "SMBIOS information not available";
+                }
+
+                // Query for Embedded Controller Version
+                var ecQuery = new ObjectQuery("SELECT EmbeddedControllerMajorVersion, EmbeddedControllerMinorVersion FROM Win32_BIOS");
+                using var ecSearcher = new ManagementObjectSearcher(scope, ecQuery);
+                var ecInfo = await Task.Run(() => ecSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+
+                if (ecInfo != null)
+                {
+                    int ecMajorVersion = Convert.ToInt32(ecInfo["EmbeddedControllerMajorVersion"]);
+                    int ecMinorVersion = Convert.ToInt32(ecInfo["EmbeddedControllerMinorVersion"]);
+                    scanStatus.EmbeddedControllerVersion = $"{ecMajorVersion}.{ecMinorVersion}";
+                }
+                else
+                {
+                    scanStatus.EmbeddedControllerVersion = "Embedded Controller information not available";
+                }
             }
             catch (Exception ex)
             {
-                Logger.Log(LogLevel.ERROR, $"Error getting BIOS info: {ex.Message}", context: "GetBIOSInfoAsync");
-                scanStatus.BIOSVersionDate = "Error: " + ex.Message;
-                scanStatus.SMBIOSVersion = "Error: " + ex.Message;
-                scanStatus.EmbeddedControllerVersion = "Error: " + ex.Message;
+                scanStatus.BIOSVersionDate = "Error retrieving BIOS information";
+                scanStatus.SMBIOSVersion = "Error";
+                scanStatus.EmbeddedControllerVersion = "Error";
             }
         }
+
+
+
 
         private async Task GetLastLoggedUserAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
