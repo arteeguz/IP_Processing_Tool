@@ -56,27 +56,26 @@ namespace IPProcessingTool
         private void InitializeColumnSettings()
         {
             dataColumnSettings = new ObservableCollection<ColumnSetting>
-            {
-                new ColumnSetting { Name = "IP Address", IsSelected = true },
-                new ColumnSetting { Name = "MAC Address", IsSelected = true },
-                new ColumnSetting { Name = "Hostname", IsSelected = true },
-                new ColumnSetting { Name = "Last Logged User", IsSelected = false },
-                new ColumnSetting { Name = "Machine Type", IsSelected = false },
-                new ColumnSetting { Name = "Machine SKU", IsSelected = false },
-                new ColumnSetting { Name = "Disk Size", IsSelected = true },
-                new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
-                new ColumnSetting { Name = "Other Drives", IsSelected = true },
-                new ColumnSetting { Name = "Installed Core Software", IsSelected = false },
-                new ColumnSetting { Name = "RAM Size", IsSelected = false },
-                new ColumnSetting { Name = "Windows Version", IsSelected = false },
-                new ColumnSetting { Name = "Windows Release", IsSelected = false },
-                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
-                new ColumnSetting { Name = "Date", IsSelected = true },
-                new ColumnSetting { Name = "Time", IsSelected = true },
-                new ColumnSetting { Name = "Ping Time", IsSelected = true },
-                new ColumnSetting { Name = "Status", IsSelected = true },
-                new ColumnSetting { Name = "Details", IsSelected = true }
-            };
+    {
+        new ColumnSetting { Name = "IP Address", IsSelected = true },
+        new ColumnSetting { Name = "MAC Address", IsSelected = true },
+        new ColumnSetting { Name = "Hostname", IsSelected = true },
+        new ColumnSetting { Name = "Last Logged User", IsSelected = false },
+        new ColumnSetting { Name = "Machine Model", IsSelected = false },
+        new ColumnSetting { Name = "Disk Size", IsSelected = true },
+        new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
+        new ColumnSetting { Name = "Other Drives", IsSelected = true },
+        new ColumnSetting { Name = "Installed Core Software", IsSelected = false },
+        new ColumnSetting { Name = "RAM Size", IsSelected = false },
+        new ColumnSetting { Name = "Windows Version", IsSelected = false },
+        new ColumnSetting { Name = "Windows Release", IsSelected = false },
+        new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
+        new ColumnSetting { Name = "Date", IsSelected = true },
+        new ColumnSetting { Name = "Time", IsSelected = true },
+        new ColumnSetting { Name = "Ping Time", IsSelected = true },
+        new ColumnSetting { Name = "Status", IsSelected = true },
+        new ColumnSetting { Name = "Details", IsSelected = true }
+    };
         }
 
         private void UpdateDataGridColumns()
@@ -392,18 +391,13 @@ namespace IPProcessingTool
                 var scope = new ManagementScope($"\\\\{ip}\\root\\cimv2", options);
                 try
                 {
-await Task.Run(() => scope.Connect(), cancellationToken);
+                    await Task.Run(() => scope.Connect(), cancellationToken);
 
                     var tasks = new List<Task>();
 
-                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Type")))
+                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Model")))
                     {
                         tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
-                    }
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine SKU"))
-                    {
-                        tasks.Add(GetMachineSKUAsync(scope, scanStatus, cancellationToken));
                     }
 
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
@@ -472,32 +466,14 @@ await Task.Run(() => scope.Connect(), cancellationToken);
                     {
                         if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Hostname"))
                             scanStatus.Hostname = machine["Name"]?.ToString() ?? "N/A";
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine Type"))
-                            scanStatus.MachineType = machine["Model"]?.ToString() ?? "N/A";
+                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine Model"))
+                            scanStatus.MachineModel = machine["Model"]?.ToString() ?? "N/A";
                     }
                 }
             }
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting computer system info: {ex.Message}", context: "GetComputerSystemInfoAsync");
-            }
-        }
-
-        private async Task GetMachineSKUAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
-        {
-            try
-            {
-                var skuQuery = new ObjectQuery("SELECT Version FROM Win32_ComputerSystemProduct");
-                using var skuSearcher = new ManagementObjectSearcher(scope, skuQuery);
-                var sku = await Task.Run(() => skuSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                if (sku != null)
-                {
-                    scanStatus.MachineSKU = sku["Version"]?.ToString() ?? "N/A";
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Error getting machine SKU: {ex.Message}", context: "GetMachineSKUAsync");
             }
         }
 
@@ -741,7 +717,7 @@ await Task.Run(() => scope.Connect(), cancellationToken);
                 string[] str = new string[(int)macAddrLen];
                 for (int i = 0; i < macAddrLen; i++)
                     str[i] = macAddr[i].ToString("x2");
-return string.Join(":", str);
+                return string.Join(":", str);
             }
             catch (Exception ex)
             {
@@ -1017,51 +993,49 @@ return string.Join(":", str);
             var property = typeof(ScanStatus).GetProperty(propertyName);
             return property?.GetValue(scanStatus)?.ToString() ?? "N/A";
         }
-    }
 
-    public class ScanStatus
-    {
-        public string IPAddress { get; set; }
-        public string Hostname { get; set; }
-        public string LastLoggedUser { get; set; }
-        public string MachineType { get; set; }
-        public string MachineSKU { get; set; }
-        public string InstalledCoreSoftware { get; set; }
-        public string RAMSize { get; set; }
-        public string WindowsVersion { get; set; }
-        public string WindowsRelease { get; set; }
-        public string MicrosoftOfficeVersion { get; set; }
-        public string Date { get; set; }
-        public string Time { get; set; }
-        public string Status { get; set; }
-        public string Details { get; set; }
-        public string MACAddress { get; set; }
-        public string DiskSize { get; set; }
-        public string DiskFreeSpace { get; set; }
-        public string OtherDrives { get; set; }
-        public long PingTime { get; set; }
-
-        public ScanStatus()
+        public class ScanStatus
         {
-            IPAddress = "";
-            Hostname = "N/A";
-            LastLoggedUser = "N/A";
-            MachineType = "N/A";
-            MachineSKU = "N/A";
-            InstalledCoreSoftware = "N/A";
-            RAMSize = "N/A";
-            WindowsVersion = "N/A";
-            WindowsRelease = "N/A";
-            MicrosoftOfficeVersion = "N/A";
-            Date = DateTime.Now.ToString("M/dd/yyyy");
-            Time = DateTime.Now.ToString("HH:mm");
-            Status = "Not Started";
-            Details = "N/A";
-            MACAddress = "N/A";
-            DiskSize = "N/A";
-            DiskFreeSpace = "N/A";
-            OtherDrives = "N/A";
-            PingTime = -1;
+            public string IPAddress { get; set; }
+            public string Hostname { get; set; }
+            public string LastLoggedUser { get; set; }
+            public string MachineModel { get; set; }
+            public string InstalledCoreSoftware { get; set; }
+            public string RAMSize { get; set; }
+            public string WindowsVersion { get; set; }
+            public string WindowsRelease { get; set; }
+            public string MicrosoftOfficeVersion { get; set; }
+            public string Date { get; set; }
+            public string Time { get; set; }
+            public string Status { get; set; }
+            public string Details { get; set; }
+            public string MACAddress { get; set; }
+            public string DiskSize { get; set; }
+            public string DiskFreeSpace { get; set; }
+            public string OtherDrives { get; set; }
+            public long PingTime { get; set; }
+
+            public ScanStatus()
+            {
+                IPAddress = "";
+                Hostname = "N/A";
+                LastLoggedUser = "N/A";
+                MachineModel = "N/A";
+                InstalledCoreSoftware = "N/A";
+                RAMSize = "N/A";
+                WindowsVersion = "N/A";
+                WindowsRelease = "N/A";
+                MicrosoftOfficeVersion = "N/A";
+                Date = DateTime.Now.ToString("M/dd/yyyy");
+                Time = DateTime.Now.ToString("HH:mm");
+                Status = "Not Started";
+                Details = "N/A";
+                MACAddress = "N/A";
+                DiskSize = "N/A";
+                DiskFreeSpace = "N/A";
+                OtherDrives = "N/A";
+                PingTime = -1;
+            }
         }
     }
 }
