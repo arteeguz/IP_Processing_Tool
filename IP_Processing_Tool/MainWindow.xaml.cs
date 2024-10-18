@@ -56,25 +56,24 @@ namespace IPProcessingTool
         private void InitializeColumnSettings()
         {
             dataColumnSettings = new ObservableCollection<ColumnSetting>
-            {
-                new ColumnSetting { Name = "IP Address", IsSelected = true },
-                new ColumnSetting { Name = "MAC Address", IsSelected = true },
-                new ColumnSetting { Name = "Hostname", IsSelected = true },
-                new ColumnSetting { Name = "Last Logged User", IsSelected = false },
-                new ColumnSetting { Name = "Machine Model", IsSelected = false },
-                new ColumnSetting { Name = "Disk Size", IsSelected = true },
-                new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
-                new ColumnSetting { Name = "Other Drives", IsSelected = true },
-                new ColumnSetting { Name = "RAM Size", IsSelected = false },
-                new ColumnSetting { Name = "Windows Version", IsSelected = false },
-                new ColumnSetting { Name = "Windows Release", IsSelected = false },
-                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
-                new ColumnSetting { Name = "Date", IsSelected = true },
-                new ColumnSetting { Name = "Time", IsSelected = true },
-                new ColumnSetting { Name = "Ping Time", IsSelected = true },
-                new ColumnSetting { Name = "Status", IsSelected = true },
-                new ColumnSetting { Name = "Details", IsSelected = true }
-            };
+    {
+        new ColumnSetting { Name = "IP Address", IsSelected = true },
+        new ColumnSetting { Name = "MAC Address", IsSelected = true },
+        new ColumnSetting { Name = "Hostname", IsSelected = true },
+        new ColumnSetting { Name = "Last Logged User", IsSelected = false },
+        new ColumnSetting { Name = "Machine Model", IsSelected = false },
+        new ColumnSetting { Name = "Disk Size", IsSelected = true },
+        new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
+        new ColumnSetting { Name = "Other Drives", IsSelected = true },
+        new ColumnSetting { Name = "RAM Size", IsSelected = false },
+        new ColumnSetting { Name = "Windows Info", IsSelected = true }, // Updated field
+        new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
+        new ColumnSetting { Name = "Date", IsSelected = true },
+        new ColumnSetting { Name = "Time", IsSelected = true },
+        new ColumnSetting { Name = "Ping Time", IsSelected = true },
+        new ColumnSetting { Name = "Status", IsSelected = true },
+        new ColumnSetting { Name = "Details", IsSelected = true }
+    };
         }
 
         private void UpdateDataGridColumns()
@@ -409,7 +408,7 @@ namespace IPProcessingTool
                         tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
                     }
 
-                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Windows Version" || c.Name == "Windows Release")))
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Info"))
                     {
                         tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
                     }
@@ -508,24 +507,73 @@ namespace IPProcessingTool
         {
             try
             {
-                var osQuery = new ObjectQuery("SELECT Caption, BuildNumber FROM Win32_OperatingSystem");
+                var osQuery = new ObjectQuery("SELECT Caption, Version, BuildNumber FROM Win32_OperatingSystem");
                 using var osSearcher = new ManagementObjectSearcher(scope, osQuery);
                 var os = await Task.Run(() => osSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
                 if (os != null)
                 {
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Version"))
-                        scanStatus.WindowsVersion = os["Caption"]?.ToString() ?? "N/A";
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Release"))
-                    {
-                        string buildNumber = os["BuildNumber"]?.ToString() ?? "N/A";
-                        scanStatus.WindowsRelease = MapWindowsRelease(buildNumber, scanStatus.IPAddress);
-                    }
+                    string caption = os["Caption"]?.ToString() ?? "Unknown Windows";
+                    string buildNumber = os["BuildNumber"]?.ToString() ?? "Unknown";
+                    string version = os["Version"]?.ToString() ?? "Unknown";
+
+                    string windowsEdition = GetWindowsEdition(caption);
+                    string releaseId = await GetWindowsReleaseIdAsync(scope, cancellationToken);
+
+                    scanStatus.WindowsInfo = $"{windowsEdition} {releaseId}";
                 }
             }
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting Windows info: {ex.Message}", context: "GetWindowsInfoAsync");
+                scanStatus.WindowsInfo = "Error retrieving Windows info";
             }
+        }
+
+        private string GetWindowsEdition(string caption)
+        {
+            if (caption.Contains("Windows 10"))
+                return "Windows 10";
+            else if (caption.Contains("Windows 11"))
+                return "Windows 11";
+            else
+                return caption;
+        }
+
+        private async Task<string> GetWindowsReleaseIdAsync(ManagementScope scope, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var query = new ObjectQuery(@"SELECT * FROM Win32_Registry");
+                using var searcher = new ManagementObjectSearcher(scope, query);
+                var registryEntries = await Task.Run(() => searcher.Get(), cancellationToken);
+
+                foreach (ManagementObject registryEntry in registryEntries)
+                {
+                    using var baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, scope.Path.Server);
+                    using var key = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+
+                    if (key != null)
+                    {
+                        string displayVersion = key.GetValue("DisplayVersion") as string;
+                        if (!string.IsNullOrEmpty(displayVersion))
+                        {
+                            return displayVersion;
+                        }
+
+                        // Fallback for older versions
+                        string releaseId = key.GetValue("ReleaseId") as string;
+                        if (!string.IsNullOrEmpty(releaseId))
+                        {
+                            return releaseId;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting Windows release ID: {ex.Message}", context: "GetWindowsReleaseIdAsync");
+            }
+            return "Unknown";
         }
 
         private async Task GetOfficeVersionAsync(string machineName, ScanStatus scanStatus, CancellationToken cancellationToken)
@@ -609,73 +657,6 @@ namespace IPProcessingTool
             }
         }
 
-        private string MapWindowsRelease(string buildNumber, string ipAddress = null)
-        {
-            if (string.IsNullOrEmpty(buildNumber)) return "Unknown";
-
-            switch (buildNumber)
-            {
-                case "19041":
-                case "19042":
-                case "19043":
-                case "19044":
-                    return "Windows 10 20H2";
-                case "19045":
-                    string versionDetail = GetWindowsVersionDetail(ipAddress, buildNumber);
-                    return $"Windows 10 {versionDetail}";
-                case "22000":
-                    return "Windows 11 21H2";
-                case "22621":
-                case "22622":
-                    return "Windows 11 22H2";
-                case "22631":
-                case "22632":
-                    return "Windows 11 23H2";
-                default:
-                    return $"Unknown (Build {buildNumber})";
-            }
-        }
-
-        private string GetWindowsVersionDetail(string ipAddress, string buildNumber)
-        {
-            try
-            {
-                string versionDetail = "Unknown";
-                using (var regKey = string.IsNullOrEmpty(ipAddress) ?
-                       Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion") :
-                       RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, ipAddress)
-                                  .OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
-                {
-                    if (regKey != null)
-                    {
-                        versionDetail = regKey.GetValue("DisplayVersion")?.ToString();
-                    }
-                }
-
-                if (string.IsNullOrEmpty(versionDetail))
-                {
-                    using (var regKey = string.IsNullOrEmpty(ipAddress) ?
-                           Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion") :
-                           RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, ipAddress)
-                                      .OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
-                    {
-                        versionDetail = regKey.GetValue("ReleaseId")?.ToString();
-                    }
-                }
-
-                return versionDetail switch
-                {
-                    "21H2" => "21H2",
-                    "22H2" => "22H2",
-                    _ => $"Unknown (Build {buildNumber})"
-                };
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Failed to get specific Windows version detail. Error: {ex.Message}", context: "GetWindowsVersionDetail");
-                return $"Unknown (Build {buildNumber})";
-            }
-        }
 
         private async Task<string> GetMACAddressAsync(string ipAddress, CancellationToken cancellationToken)
         {
@@ -977,8 +958,7 @@ namespace IPProcessingTool
             public string LastLoggedUser { get; set; }
             public string MachineModel { get; set; }
             public string RAMSize { get; set; }
-            public string WindowsVersion { get; set; }
-            public string WindowsRelease { get; set; }
+            public string WindowsInfo { get; set; } // New combined field
             public string MicrosoftOfficeVersion { get; set; }
             public string Date { get; set; }
             public string Time { get; set; }
@@ -997,8 +977,7 @@ namespace IPProcessingTool
                 LastLoggedUser = "N/A";
                 MachineModel = "N/A";
                 RAMSize = "N/A";
-                WindowsVersion = "N/A";
-                WindowsRelease = "N/A";
+                WindowsInfo = "N/A";
                 MicrosoftOfficeVersion = "N/A";
                 Date = DateTime.Now.ToString("M/dd/yyyy");
                 Time = DateTime.Now.ToString("HH:mm");
