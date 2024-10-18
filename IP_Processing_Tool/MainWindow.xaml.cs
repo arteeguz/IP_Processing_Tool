@@ -28,7 +28,8 @@ namespace IPProcessingTool
         private int pingTimeout = 1000; // Default value in milliseconds
         private int totalIPs;
         private int processedIPs;
-        private int executionTimeLimit = 45; // Default value in seconds
+        private int MaxConcurrentScans = Environment.ProcessorCount; // Default to number of processor cores
+        private int ExecutionTimeLimit = 60; // Default to 60 seconds
         private const int BATCH_SIZE = 50;
         private List<ScanStatus> _batch = new List<ScanStatus>();
 
@@ -59,7 +60,6 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "IP Address", IsSelected = true },
                 new ColumnSetting { Name = "MAC Address", IsSelected = true },
                 new ColumnSetting { Name = "Hostname", IsSelected = true },
-                new ColumnSetting { Name = "Ping Time", IsSelected = true },
                 new ColumnSetting { Name = "Last Logged User", IsSelected = false },
                 new ColumnSetting { Name = "Machine Type", IsSelected = false },
                 new ColumnSetting { Name = "Machine SKU", IsSelected = false },
@@ -73,6 +73,7 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
                 new ColumnSetting { Name = "Date", IsSelected = true },
                 new ColumnSetting { Name = "Time", IsSelected = true },
+                new ColumnSetting { Name = "Ping Time", IsSelected = true },
                 new ColumnSetting { Name = "Status", IsSelected = true },
                 new ColumnSetting { Name = "Details", IsSelected = true }
             };
@@ -104,14 +105,14 @@ namespace IPProcessingTool
 
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
-            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, parallelOptions.MaxDegreeOfParallelism, executionTimeLimit);
+            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, MaxConcurrentScans, ExecutionTimeLimit);
             if (settingsWindow.ShowDialog() == true)
             {
                 dataColumnSettings = new ObservableCollection<ColumnSetting>(settingsWindow.DataColumns);
                 autoSave = settingsWindow.AutoSave;
                 pingTimeout = settingsWindow.PingTimeout;
-                parallelOptions.MaxDegreeOfParallelism = settingsWindow.MaxConcurrentScans;
-                executionTimeLimit = settingsWindow.ExecutionTimeLimit;
+                MaxConcurrentScans = settingsWindow.MaxConcurrentScans;
+                ExecutionTimeLimit = settingsWindow.ExecutionTimeLimit;
 
                 UpdateDataGridColumns();
 
@@ -136,75 +137,34 @@ namespace IPProcessingTool
             DisableButtons();
 
             cancellationTokenSource = new CancellationTokenSource();
-            var segmentSemaphore = new SemaphoreSlim(Math.Max(1, parallelOptions.MaxDegreeOfParallelism / 4)); // Limit segments
-            var ipSemaphore = new SemaphoreSlim(parallelOptions.MaxDegreeOfParallelism);
+            var semaphore = new SemaphoreSlim(MaxConcurrentScans);
 
             try
             {
-                var progress = new Progress<int>(value =>
+                var tasks = new List<Task>();
+                foreach (var ip in ips)
                 {
-                    UpdateProgressBar(value);
-                    StatusDataGrid.Items.Refresh();
-                });
-
-                var ipBatches = ips.Chunk(256); // Assuming each segment has 256 IPs
-                var batchTasks = new List<Task>();
-
-                foreach (var batch in ipBatches)
-                {
-                    await segmentSemaphore.WaitAsync(cancellationTokenSource.Token);
-                    batchTasks.Add(Task.Run(async () =>
+                    await semaphore.WaitAsync(cancellationTokenSource.Token);
+                    tasks.Add(Task.Run(async () =>
                     {
                         try
                         {
-                            var batchResults = new List<ScanStatus>();
-                            foreach (var ip in batch)
+                            var scanStatus = await ProcessIPAsync(ip, cancellationTokenSource.Token);
+                            if (scanStatus != null)
                             {
-                                await ipSemaphore.WaitAsync(cancellationTokenSource.Token);
-                                try
-                                {
-                                    if (IsValidIP(ip))
-                                    {
-                                        var result = await ProcessIPAsync(ip, cancellationTokenSource.Token);
-                                        if (result != null)
-                                        {
-                                            lock (batchResults)
-                                            {
-                                                batchResults.Add(result);
-                                            }
-                                        }
-                                    }
-                                    else
-                                    {
-                                        HighlightInvalidInput(ip);
-                                    }
-                                }
-                                finally
-                                {
-                                    ipSemaphore.Release();
-                                }
+                                UpdateScanStatus(scanStatus);
                             }
-
-                            // Update UI in batches
-                            await Dispatcher.InvokeAsync(() =>
-                            {
-                                foreach (var result in batchResults)
-                                {
-                                    UpdateScanStatus(result);
-                                }
-                            });
-
-                            Interlocked.Add(ref processedIPs, batch.Length);
-                            ((IProgress<int>)progress).Report((int)((double)processedIPs / totalIPs * 100));
+                            Interlocked.Increment(ref processedIPs);
+                            UpdateProgressBar((int)((double)processedIPs / totalIPs * 100));
                         }
                         finally
                         {
-                            segmentSemaphore.Release();
+                            semaphore.Release();
                         }
                     }, cancellationTokenSource.Token));
                 }
 
-                await Task.WhenAll(batchTasks);
+                await Task.WhenAll(tasks);
             }
             catch (OperationCanceledException)
             {
@@ -221,8 +181,7 @@ namespace IPProcessingTool
                 UpdateStatusBar("Completed processing all IPs.");
                 UpdateProgressBar(100);
 
-                // Force a final update of the DataGrid
-                await Dispatcher.InvokeAsync(() =>
+                Dispatcher.Invoke(() =>
                 {
                     StatusDataGrid.Items.Refresh();
                 });
@@ -368,7 +327,7 @@ namespace IPProcessingTool
             }
         }
 
-        private async Task<ScanStatus> ProcessIPAsync(string ip, CancellationToken cancellationToken = default)
+        private async Task<ScanStatus> ProcessIPAsync(string ip, CancellationToken cancellationToken)
         {
             var scanStatus = new ScanStatus
             {
@@ -376,21 +335,15 @@ namespace IPProcessingTool
                 Status = "Processing",
                 Details = "",
                 Date = DateTime.Now.ToString("M/dd/yyyy"),
-                Time = DateTime.Now.ToString("HH:mm")
+                Time = DateTime.Now.ToString("HH:mm:ss")
             };
-            AddScanStatus(scanStatus);
-
-            UpdateStatusBar($"Processing IP: {ip} ({processedIPs + 1}/{totalIPs})");
-
-            Logger.Log(LogLevel.INFO, "Started processing IP", context: "ProcessIPAsync", additionalInfo: ip);
 
             try
             {
-                var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(executionTimeLimit));
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(ExecutionTimeLimit));
 
-                var processingTask = ProcessIPInternalAsync(ip, scanStatus, cts.Token);
-                await processingTask.WaitAsync(TimeSpan.FromSeconds(executionTimeLimit), cts.Token);
+                await ProcessIPInternalAsync(ip, scanStatus, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -404,7 +357,6 @@ namespace IPProcessingTool
                     scanStatus.Status = "Timeout";
                     scanStatus.Details = "Operation timed out";
                 }
-                Logger.Log(LogLevel.WARNING, $"Operation for IP {ip} was canceled or timed out", context: "ProcessIPAsync");
             }
             catch (Exception ex)
             {
@@ -440,49 +392,53 @@ namespace IPProcessingTool
                 var scope = new ManagementScope($"\\\\{ip}\\root\\cimv2", options);
                 try
                 {
-                    await Task.Run(() => scope.Connect(), cancellationToken);
+await Task.Run(() => scope.Connect(), cancellationToken);
 
                     var tasks = new List<Task>();
 
                     if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Type")))
+                    {
                         tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine SKU"))
+                    {
                         tasks.Add(GetMachineSKUAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
+                    {
                         tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Installed Core Software"))
+                    {
                         tasks.Add(GetInstalledSoftwareAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
+                    {
                         tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Windows Version" || c.Name == "Windows Release")))
+                    {
                         tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
+                    {
                         tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
+                    }
+
                     if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space" || c.Name == "Other Drives")))
+                    {
                         tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
-
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(executionTimeLimit));
-
-                    try
-                    {
-                        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(executionTimeLimit), timeoutCts.Token);
-                        scanStatus.Status = "Complete";
                     }
-                    catch (OperationCanceledException)
-                    {
-                        if (cancellationToken.IsCancellationRequested)
-                        {
-                            scanStatus.Status = "Cancelled";
-                            scanStatus.Details = "Operation was cancelled by user";
-                        }
-                        else
-                        {
-                            scanStatus.Status = "Partial";
-                            scanStatus.Details = $"Some data retrieval operations timed out after {executionTimeLimit} seconds";
-                            SetTimedOutForIncompleteFields(scanStatus);
-                        }
-                    }
+
+                    await Task.WhenAll(tasks);
+
+                    scanStatus.Status = "Complete";
                 }
                 catch (Exception ex)
                 {
@@ -500,34 +456,8 @@ namespace IPProcessingTool
 
             stopwatch.Stop();
             scanStatus.Details += $" Total processing time: {stopwatch.ElapsedMilliseconds} ms";
-        }
 
-        private void SetTimedOutForIncompleteFields(ScanStatus scanStatus)
-        {
-            if (string.IsNullOrEmpty(scanStatus.Hostname) || scanStatus.Hostname == "N/A")
-                scanStatus.Hostname = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.LastLoggedUser) || scanStatus.LastLoggedUser == "N/A")
-                scanStatus.LastLoggedUser = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.MachineType) || scanStatus.MachineType == "N/A")
-                scanStatus.MachineType = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.MachineSKU) || scanStatus.MachineSKU == "N/A")
-                scanStatus.MachineSKU = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.InstalledCoreSoftware) || scanStatus.InstalledCoreSoftware == "N/A")
-                scanStatus.InstalledCoreSoftware = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.RAMSize) || scanStatus.RAMSize == "N/A")
-                scanStatus.RAMSize = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.WindowsVersion) || scanStatus.WindowsVersion == "N/A")
-                scanStatus.WindowsVersion = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.WindowsRelease) || scanStatus.WindowsRelease == "N/A")
-                scanStatus.WindowsRelease = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.MicrosoftOfficeVersion) || scanStatus.MicrosoftOfficeVersion == "N/A")
-                scanStatus.MicrosoftOfficeVersion = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.DiskSize) || scanStatus.DiskSize == "N/A")
-                scanStatus.DiskSize = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.DiskFreeSpace) || scanStatus.DiskFreeSpace == "N/A")
-                scanStatus.DiskFreeSpace = "Timed Out";
-            if (string.IsNullOrEmpty(scanStatus.OtherDrives) || scanStatus.OtherDrives == "N/A")
-                scanStatus.OtherDrives = "Timed Out";
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         private async Task GetComputerSystemInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
@@ -681,16 +611,6 @@ namespace IPProcessingTool
                                                     !displayName.Contains("Tools", StringComparison.OrdinalIgnoreCase))
                                                 {
                                                     officeVersion = $"{displayName} ({displayVersion})";
-
-                                                    // Determine specific version if not clear from displayName
-                                                    if (!displayName.Contains("365") && !displayName.Contains("2013") && !displayName.Contains("2016") && !displayName.Contains("2019"))
-                                                    {
-                                                        if (displayVersion.StartsWith("15."))
-                                                            officeVersion += " (Office 2013)";
-                                                        else if (displayVersion.StartsWith("16."))
-                                                            officeVersion += " (Office 2016 or newer)";
-                                                    }
-
                                                     break;
                                                 }
                                             }
@@ -700,26 +620,16 @@ namespace IPProcessingTool
                             }
                         }
                     }
-                    catch (System.IO.IOException ex)
+                    catch (Exception ex) when (!(ex is OperationCanceledException))
                     {
-                        Logger.Log(LogLevel.WARNING, $"Network error accessing registry for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
-                        officeVersion = "Network Error";
-                    }
-                    catch (System.Security.SecurityException ex)
-                    {
-                        Logger.Log(LogLevel.WARNING, $"Security error accessing registry for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
-                        officeVersion = "Access Denied";
+                        Logger.Log(LogLevel.ERROR, $"Error accessing registry for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
+                        officeVersion = "Error accessing registry";
                     }
                 }, cancellationToken);
             }
             catch (OperationCanceledException)
             {
                 officeVersion = "Operation Cancelled";
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Unexpected error getting Microsoft Office version for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
-                officeVersion = "Error";
             }
 
             scanStatus.MicrosoftOfficeVersion = officeVersion;
@@ -759,7 +669,6 @@ namespace IPProcessingTool
                 case "19044":
                     return "Windows 10 20H2";
                 case "19045":
-                    // Here, we check the DisplayVersion or ReleaseId to distinguish between 21H2 and 22H2
                     string versionDetail = GetWindowsVersionDetail(ipAddress, buildNumber);
                     return $"Windows 10 {versionDetail}";
                 case "22000":
@@ -793,7 +702,6 @@ namespace IPProcessingTool
 
                 if (string.IsNullOrEmpty(versionDetail))
                 {
-                    // Fall back to ReleaseId if DisplayVersion is not available
                     using (var regKey = string.IsNullOrEmpty(ipAddress) ?
                            Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion") :
                            RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, ipAddress)
@@ -833,8 +741,7 @@ namespace IPProcessingTool
                 string[] str = new string[(int)macAddrLen];
                 for (int i = 0; i < macAddrLen; i++)
                     str[i] = macAddr[i].ToString("x2");
-
-                return string.Join(":", str);
+return string.Join(":", str);
             }
             catch (Exception ex)
             {
@@ -911,49 +818,22 @@ namespace IPProcessingTool
             }
         }
 
-        private void AddScanStatus(ScanStatus scanStatus)
+        private void UpdateScanStatus(ScanStatus scanStatus)
         {
             Dispatcher.Invoke(() =>
             {
-                lock (ScanStatuses)
+                var existingStatus = ScanStatuses.FirstOrDefault(s => s.IPAddress == scanStatus.IPAddress);
+                if (existingStatus != null)
+                {
+                    int index = ScanStatuses.IndexOf(existingStatus);
+                    ScanStatuses[index] = scanStatus;
+                }
+                else
                 {
                     ScanStatuses.Add(scanStatus);
                 }
-            });
-        }
-
-        private void UpdateScanStatus(ScanStatus scanStatus)
-        {
-            lock (_batch)
-            {
-                _batch.Add(scanStatus);
-                if (_batch.Count >= BATCH_SIZE)
-                {
-                    FlushBatch();
-                }
-            }
-        }
-
-        private void FlushBatch()
-        {
-            Dispatcher.Invoke(() =>
-            {
-                foreach (var status in _batch)
-                {
-                    var existingStatus = ScanStatuses.FirstOrDefault(s => s.IPAddress == status.IPAddress);
-                    if (existingStatus != null)
-                    {
-                        int index = ScanStatuses.IndexOf(existingStatus);
-                        ScanStatuses[index] = status;
-                    }
-                    else
-                    {
-                        ScanStatuses.Add(status);
-                    }
-                }
                 StatusDataGrid.Items.Refresh();
             });
-            _batch.Clear();
         }
 
         private void ClearButton_Click(object sender, RoutedEventArgs e)
@@ -978,7 +858,7 @@ namespace IPProcessingTool
         private void HighlightInvalidInput(string input)
         {
             var scanStatus = new ScanStatus { IPAddress = input, Status = "Invalid", Details = "Invalid IP/Segment" };
-            AddScanStatus(scanStatus);
+            UpdateScanStatus(scanStatus);
             Logger.Log(LogLevel.WARNING, "Invalid IP/Segment input", context: "HighlightInvalidInput", additionalInfo: input);
         }
 
@@ -1075,17 +955,14 @@ namespace IPProcessingTool
                 outputFilePath = saveFileDialog.FileName;
                 bool fileExists = File.Exists(outputFilePath);
 
-                // Generate the header based on selected columns
                 var header = string.Join(",", dataColumnSettings.Where(c => c.IsSelected).Select(c => $"\"{c.Name}\""));
 
                 if (fileExists)
                 {
-                    // Read the first line of the existing file to compare with the header
                     string existingHeader = File.ReadLines(outputFilePath).FirstOrDefault();
 
                     if (existingHeader != header)
                     {
-                        // Header doesn't match, prompt the user or overwrite file
                         var result = MessageBox.Show("The existing file has a different header. Do you want to overwrite it?", "Header Mismatch", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
                         if (result == MessageBoxResult.Cancel)
                         {
@@ -1093,23 +970,19 @@ namespace IPProcessingTool
                         }
                         else if (result == MessageBoxResult.Yes)
                         {
-                            // Overwrite the file and write the new header
                             File.WriteAllText(outputFilePath, header + Environment.NewLine);
                         }
                         else if (result == MessageBoxResult.No)
                         {
-                            // Append mode, write a new header only if needed
                             File.AppendAllText(outputFilePath, header + Environment.NewLine);
                         }
                     }
                 }
                 else
                 {
-                    // File does not exist, write the header
                     File.WriteAllText(outputFilePath, header + Environment.NewLine);
                 }
 
-                // Now save all the scan results
                 SaveAllScanResults();
             }
         }
@@ -1150,7 +1023,6 @@ namespace IPProcessingTool
     {
         public string IPAddress { get; set; }
         public string Hostname { get; set; }
-        public long PingTime { get; set; } // in milliseconds
         public string LastLoggedUser { get; set; }
         public string MachineType { get; set; }
         public string MachineSKU { get; set; }
@@ -1167,12 +1039,12 @@ namespace IPProcessingTool
         public string DiskSize { get; set; }
         public string DiskFreeSpace { get; set; }
         public string OtherDrives { get; set; }
+        public long PingTime { get; set; }
 
         public ScanStatus()
         {
             IPAddress = "";
             Hostname = "N/A";
-            PingTime = -1; // -1 indicates no ping response
             LastLoggedUser = "N/A";
             MachineType = "N/A";
             MachineSKU = "N/A";
@@ -1189,6 +1061,7 @@ namespace IPProcessingTool
             DiskSize = "N/A";
             DiskFreeSpace = "N/A";
             OtherDrives = "N/A";
+            PingTime = -1;
         }
     }
 }
