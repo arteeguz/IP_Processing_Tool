@@ -372,88 +372,127 @@ namespace IPProcessingTool
         private async Task ProcessIPInternalAsync(string ip, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
             var stopwatch = Stopwatch.StartNew();
-            var (pingSuccess, pingTime) = await PingHostAsync(ip, cancellationToken);
 
-            scanStatus.PingTime = pingSuccess ? pingTime : -1;
-
-            if (pingSuccess)
+            try
             {
-                scanStatus.Status = "Reachable";
+                var (pingSuccess, pingTime) = await PingHostAsync(ip, cancellationToken);
 
-                // Get MAC Address
-                scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
+                scanStatus.PingTime = pingSuccess ? pingTime : -1;
 
-                ConnectionOptions options = new ConnectionOptions
+                if (pingSuccess)
                 {
-                    Impersonation = ImpersonationLevel.Impersonate,
-                    EnablePrivileges = true,
-                    Authentication = AuthenticationLevel.PacketPrivacy
-                };
+                    scanStatus.Status = "Reachable";
 
-                var scope = new ManagementScope($"\\\\{ip}\\root\\cimv2", options);
-                try
-                {
-                    await Task.Run(() => scope.Connect(), cancellationToken);
-
-                    var tasks = new List<Task>();
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Model")))
+                    try
                     {
-                        tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
-                    }
+                        // Get MAC Address
+                        scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
 
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
+                        ConnectionOptions options = new ConnectionOptions
+                        {
+                            Impersonation = ImpersonationLevel.Impersonate,
+                            EnablePrivileges = true,
+                            Authentication = AuthenticationLevel.PacketPrivacy
+                        };
+
+                        var scope = new ManagementScope($"\\\\{ip}\\root\\cimv2", options);
+                        try
+                        {
+                            await Task.Run(() => scope.Connect(), cancellationToken);
+
+                            var tasks = new List<Task>();
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Model")))
+                            {
+                                tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
+                            {
+                                tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
+                            {
+                                tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Info"))
+                            {
+                                tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
+                            {
+                                tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space" || c.Name == "Other Drives")))
+                            {
+                                tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "BIOS Version/Date" || c.Name == "SMBIOS Version" || c.Name == "Embedded Controller Version")))
+                            {
+                                tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            await Task.WhenAll(tasks);
+
+                            scanStatus.Status = "Complete";
+                        }
+                        catch (System.IO.IOException ioEx)
+                        {
+                            Logger.Log(LogLevel.WARNING, $"Network error for IP {ip}: {ioEx.Message}", context: "ProcessIPInternalAsync");
+                            scanStatus.Status = "Network Error";
+                            scanStatus.Details = $"Network error: Please check connectivity and Remote Registry service. {ioEx.Message}";
+                        }
+                        catch (System.UnauthorizedAccessException uaEx)
+                        {
+                            Logger.Log(LogLevel.WARNING, $"Access denied for IP {ip}: {uaEx.Message}", context: "ProcessIPInternalAsync");
+                            scanStatus.Status = "Access Denied";
+                            scanStatus.Details = $"Access denied: Please check permissions. {uaEx.Message}";
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Log(LogLevel.ERROR, $"Error processing IP {ip}: {ex.Message}", context: "ProcessIPInternalAsync");
+                            scanStatus.Status = "Error";
+                            scanStatus.Details = $"Error: {ex.Message}";
+                        }
+                    }
+                    catch (Exception ex)
                     {
-                        tasks.Add(GetLastLoggedUserAsync(scope, scanStatus, cancellationToken));
+                        Logger.Log(LogLevel.ERROR, $"Unexpected error for IP {ip}: {ex.Message}", context: "ProcessIPInternalAsync");
+                        scanStatus.Status = "Unexpected Error";
+                        scanStatus.Details = $"Unexpected error: {ex.Message}";
                     }
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "RAM Size"))
-                    {
-                        tasks.Add(GetRAMSizeAsync(scope, scanStatus, cancellationToken));
-                    }
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Windows Info"))
-                    {
-                        tasks.Add(GetWindowsInfoAsync(scope, scanStatus, cancellationToken));
-                    }
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Microsoft Office Version"))
-                    {
-                        tasks.Add(GetOfficeVersionAsync(ip, scanStatus, cancellationToken));
-                    }
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Disk Size" || c.Name == "Disk Free Space" || c.Name == "Other Drives")))
-                    {
-                        tasks.Add(GetDiskInfoAsync(scope, scanStatus, cancellationToken));
-                    }
-
-                    if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "BIOS Version/Date" || c.Name == "SMBIOS Version" || c.Name == "Embedded Controller Version")))
-                    {
-                        tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
-                    }
-
-                    await Task.WhenAll(tasks);
-
-                    scanStatus.Status = "Complete";
                 }
-                catch (Exception ex)
+                else
                 {
-                    Logger.Log(LogLevel.WARNING, $"Failed to process IP {ip}. Error: {ex.Message}", context: "ProcessIPInternalAsync");
-                    scanStatus.Status = "Error";
-                    scanStatus.Details = $"Failed to retrieve data: {ex.Message}";
+                    scanStatus.Status = "Not Reachable";
+                    scanStatus.Details = "Host not reachable";
+                    Logger.Log(LogLevel.WARNING, $"Host not reachable for IP {ip}", context: "ProcessIPInternalAsync");
                 }
             }
-            else
+            catch (OperationCanceledException)
             {
-                scanStatus.Status = "Not Reachable";
-                scanStatus.Details = "Host not reachable";
-                Logger.Log(LogLevel.WARNING, $"Host not reachable for IP {ip}", context: "ProcessIPInternalAsync");
+                scanStatus.Status = "Cancelled";
+                scanStatus.Details = "Operation was cancelled";
+                Logger.Log(LogLevel.INFO, $"Operation cancelled for IP {ip}", context: "ProcessIPInternalAsync");
             }
+            catch (Exception ex)
+            {
+                scanStatus.Status = "Fatal Error";
+                scanStatus.Details = $"A fatal error occurred: {ex.Message}";
+                Logger.Log(LogLevel.ERROR, $"Fatal error processing IP {ip}: {ex.Message}", context: "ProcessIPInternalAsync");
+            }
+            finally
+            {
+                stopwatch.Stop();
+                scanStatus.Details += $" Total processing time: {stopwatch.ElapsedMilliseconds} ms";
 
-            stopwatch.Stop();
-            scanStatus.Details += $" Total processing time: {stopwatch.ElapsedMilliseconds} ms";
-
-            cancellationToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
         }
 
         private async Task GetComputerSystemInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
@@ -483,44 +522,59 @@ namespace IPProcessingTool
         {
             try
             {
-                var biosQuery = new ObjectQuery("SELECT SMBIOSBIOSVersion, ReleaseDate, SMBIOSMajorVersion, SMBIOSMinorVersion FROM Win32_BIOS");
-                using var biosSearcher = new ManagementObjectSearcher(scope, biosQuery);
-                var bios = await Task.Run(() => biosSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-
-                if (bios != null)
+                await Task.Run(() =>
                 {
-                    string biosVersion = bios["SMBIOSBIOSVersion"]?.ToString() ?? "Unknown";
-                    string releaseDate = bios["ReleaseDate"]?.ToString() ?? "Unknown";
-
-                    // Format the date if it's not "Unknown"
-                    if (releaseDate != "Unknown" && DateTime.TryParseExact(releaseDate, "yyyyMMddHHmmss.ffffff+000", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
+                    try
                     {
-                        releaseDate = parsedDate.ToString("yyyy-MM-dd");
+                        using (var baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, scope.Path.Server))
+                        using (var biosKey = baseKey.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS"))
+                        {
+                            if (biosKey != null)
+                            {
+                                // BIOS Version/Date
+                                string biosVendor = biosKey.GetValue("BIOSVendor") as string ?? "Unknown";
+                                string biosVersion = biosKey.GetValue("BIOSVersion") as string ?? "Unknown";
+                                string biosDate = biosKey.GetValue("BIOSReleaseDate") as string ?? "Unknown";
+
+                                // Format the date if it's not "Unknown"
+                                if (biosDate != "Unknown" && DateTime.TryParseExact(biosDate, "MM/dd/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
+                                {
+                                    biosDate = parsedDate.ToString("M/d/yyyy");
+                                }
+
+                                scanStatus.BIOSVersionDate = $"{biosVendor} {biosVersion}, {biosDate}";
+
+                                // SMBIOS Version
+                                string smbiosMajorVersion = biosKey.GetValue("SystemManagementMajorVersion") as string ?? "0";
+                                string smbiosMinorVersion = biosKey.GetValue("SystemManagementMinorVersion") as string ?? "0";
+                                scanStatus.SMBIOSVersion = $"{smbiosMajorVersion}.{smbiosMinorVersion}";
+
+                                // Embedded Controller Version
+                                string ecVersion = biosKey.GetValue("EmbeddedControllerVersion") as string ?? "N/A";
+                                scanStatus.EmbeddedControllerVersion = ecVersion;
+                            }
+                            else
+                            {
+                                throw new Exception("Unable to open BIOS registry key");
+                            }
+                        }
                     }
-
-                    scanStatus.BIOSVersionDate = $"{biosVersion} ({releaseDate})";
-
-                    int smbiosMajorVersion = Convert.ToInt32(bios["SMBIOSMajorVersion"]);
-                    int smbiosMinorVersion = Convert.ToInt32(bios["SMBIOSMinorVersion"]);
-                    scanStatus.SMBIOSVersion = $"{smbiosMajorVersion}.{smbiosMinorVersion}";
-                }
-
-                // Query for Embedded Controller Version
-                var ecQuery = new ObjectQuery("SELECT * FROM Win32_SystemEnclosure");
-                using var ecSearcher = new ManagementObjectSearcher(scope, ecQuery);
-                var enclosure = await Task.Run(() => ecSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-
-                if (enclosure != null)
-                {
-                    scanStatus.EmbeddedControllerVersion = enclosure["Version"]?.ToString() ?? "N/A";
-                }
+                    catch (System.IO.IOException ioEx)
+                    {
+                        throw new Exception($"Network error: {ioEx.Message}. Please check network connectivity and ensure the Remote Registry service is running on the target machine.");
+                    }
+                    catch (System.Security.SecurityException secEx)
+                    {
+                        throw new Exception($"Access denied: {secEx.Message}. Please ensure you have sufficient permissions to access the remote registry.");
+                    }
+                }, cancellationToken);
             }
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting BIOS info: {ex.Message}", context: "GetBIOSInfoAsync");
-                scanStatus.BIOSVersionDate = "Error";
-                scanStatus.SMBIOSVersion = "Error";
-                scanStatus.EmbeddedControllerVersion = "Error";
+                scanStatus.BIOSVersionDate = "Error: " + ex.Message;
+                scanStatus.SMBIOSVersion = "Error: " + ex.Message;
+                scanStatus.EmbeddedControllerVersion = "Error: " + ex.Message;
             }
         }
 
