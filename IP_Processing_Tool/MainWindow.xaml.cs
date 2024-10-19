@@ -59,7 +59,6 @@ namespace IPProcessingTool
             dataColumnSettings = new ObservableCollection<ColumnSetting>
     {
         new ColumnSetting { Name = "IP Address", IsSelected = true },
-        new ColumnSetting { Name = "MAC Address", IsSelected = true },
         new ColumnSetting { Name = "Hostname", IsSelected = true },
         new ColumnSetting { Name = "Last Logged User", IsSelected = false },
         new ColumnSetting { Name = "Machine Model", IsSelected = false },
@@ -72,14 +71,15 @@ namespace IPProcessingTool
         new ColumnSetting { Name = "BIOS Version Date", IsSelected = true },
         new ColumnSetting { Name = "SMBIOS Version", IsSelected = true },
         new ColumnSetting { Name = "Embedded Controller Version", IsSelected = true },
+        new ColumnSetting { Name = "MAC Address", IsSelected = true },
+        new ColumnSetting { Name = "NIC 0 LAN", IsSelected = true },
+        new ColumnSetting { Name = "NIC 1 WiFi", IsSelected = true },
+        new ColumnSetting { Name = "NIC 2 LAN 2", IsSelected = true },
         new ColumnSetting { Name = "Date", IsSelected = true },
         new ColumnSetting { Name = "Time", IsSelected = true },
         new ColumnSetting { Name = "Ping Time", IsSelected = true },
         new ColumnSetting { Name = "Status", IsSelected = true },
         new ColumnSetting { Name = "Details", IsSelected = true },
-        new ColumnSetting { Name = "NIC 0 LAN", IsSelected = true },
-        new ColumnSetting { Name = "NIC 1 WiFi", IsSelected = true },
-        new ColumnSetting { Name = "NIC 2 LAN 2", IsSelected = true },
     };
         }
 
@@ -388,9 +388,6 @@ namespace IPProcessingTool
 
                     try
                     {
-                        // Get MAC Address
-                        scanStatus.MACAddress = await GetMACAddressAsync(ip, cancellationToken);
-
                         ConnectionOptions options = new ConnectionOptions
                         {
                             Impersonation = ImpersonationLevel.Impersonate,
@@ -445,7 +442,7 @@ namespace IPProcessingTool
                                 tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
                             }
 
-                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "NIC 0 LAN" || c.Name == "NIC 1 WiFi" || c.Name == "NIC 2 LAN 2")))
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "NIC 0 LAN" || c.Name == "NIC 1 WiFi" || c.Name == "NIC 2 LAN 2" || c.Name == "MAC Address")))
                             {
                                 tasks.Add(GetNetworkAdaptersInfoAsync(scope, scanStatus, cancellationToken));
                             }
@@ -899,51 +896,73 @@ namespace IPProcessingTool
         {
             try
             {
-                var query = new ObjectQuery("SELECT * FROM Win32_NetworkAdapter WHERE PhysicalAdapter=True AND NetEnabled=True");
+                var query = new ObjectQuery("SELECT * FROM Win32_NetworkAdapter WHERE PhysicalAdapter=True");
                 using var searcher = new ManagementObjectSearcher(scope, query);
                 var adapters = await Task.Run(() => searcher.Get(), cancellationToken);
 
-                int lanCount = 0;
-                int wifiCount = 0;
+                bool macAddressSet = false;
+                bool nic0Set = false;
+                bool nic1Set = false;
+                bool nic2Set = false;
 
                 foreach (ManagementObject adapter in adapters)
                 {
                     string adapterType = adapter["AdapterType"]?.ToString() ?? "";
                     string name = adapter["Name"]?.ToString() ?? "Unknown";
-                    string macAddress = adapter["MACAddress"]?.ToString() ?? "N/A";
+                    string macAddress = adapter["MACAddress"]?.ToString();
+                    bool netEnabled = Convert.ToBoolean(adapter["NetEnabled"]);
                     string speed = adapter["Speed"] != null ? $"{Convert.ToInt64(adapter["Speed"]) / 1000000} Mbps" : "N/A";
 
-                    if (adapterType.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
+                    // Always set the MAC Address if it's not set yet, regardless of adapter type or NetEnabled status
+                    if (!macAddressSet && !string.IsNullOrEmpty(macAddress))
                     {
-                        if (lanCount == 0)
-                            scanStatus.NIC0LAN = $"{name} | MAC: {macAddress} | Speed: {speed}";
-                        else if (lanCount == 1)
-                            scanStatus.NIC2LAN2 = $"{name} | MAC: {macAddress} | Speed: {speed}";
-                        lanCount++;
-                    }
-                    else if (adapterType.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
-                             name.Contains("WiFi", StringComparison.OrdinalIgnoreCase) ||
-                             name.Contains("Wireless", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (wifiCount == 0)
-                            scanStatus.NIC1WiFi = $"{name} | MAC: {macAddress} | Speed: {speed}";
-                        wifiCount++;
+                        scanStatus.MACAddress = macAddress;
+                        macAddressSet = true;
                     }
 
-                    if (lanCount >= 2 && wifiCount >= 1) break; // We have all we need
+                    // Only set NIC info if the adapter is enabled and we're scanning for it
+                    if (netEnabled)
+                    {
+                        if (adapterType.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!nic0Set && dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 0 LAN"))
+                            {
+                                scanStatus.NIC0LAN = $"{name} | MAC: {macAddress} | Speed: {speed}";
+                                nic0Set = true;
+                            }
+                            else if (!nic2Set && dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 2 LAN 2"))
+                            {
+                                scanStatus.NIC2LAN2 = $"{name} | MAC: {macAddress} | Speed: {speed}";
+                                nic2Set = true;
+                            }
+                        }
+                        else if ((adapterType.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
+                                  name.Contains("WiFi", StringComparison.OrdinalIgnoreCase) ||
+                                  name.Contains("Wireless", StringComparison.OrdinalIgnoreCase)) &&
+                                 !nic1Set && dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 1 WiFi"))
+                        {
+                            scanStatus.NIC1WiFi = $"{name} | MAC: {macAddress} | Speed: {speed}";
+                            nic1Set = true;
+                        }
+                    }
+
+                    // Break if we've set everything we need
+                    if (macAddressSet && nic0Set && nic1Set && nic2Set) break;
                 }
 
-                // Set "Not Present" for any adapters not found
-                if (string.IsNullOrEmpty(scanStatus.NIC0LAN)) scanStatus.NIC0LAN = "Not Present";
-                if (string.IsNullOrEmpty(scanStatus.NIC1WiFi)) scanStatus.NIC1WiFi = "Not Present";
-                if (string.IsNullOrEmpty(scanStatus.NIC2LAN2)) scanStatus.NIC2LAN2 = "Not Present";
+                // Set default values for unset properties
+                if (!macAddressSet) scanStatus.MACAddress = "Not Available";
+                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 0 LAN") && !nic0Set) scanStatus.NIC0LAN = "Not Present";
+                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 1 WiFi") && !nic1Set) scanStatus.NIC1WiFi = "Not Present";
+                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 2 LAN 2") && !nic2Set) scanStatus.NIC2LAN2 = "Not Present";
             }
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting network adapters info: {ex.Message}", context: "GetNetworkAdaptersInfoAsync");
-                scanStatus.NIC0LAN = "Error retrieving data";
-                scanStatus.NIC1WiFi = "Error retrieving data";
-                scanStatus.NIC2LAN2 = "Error retrieving data";
+                scanStatus.MACAddress = "Error";
+                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 0 LAN")) scanStatus.NIC0LAN = "Error retrieving data";
+                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 1 WiFi")) scanStatus.NIC1WiFi = "Error retrieving data";
+                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 2 LAN 2")) scanStatus.NIC2LAN2 = "Error retrieving data";
             }
         }
 
