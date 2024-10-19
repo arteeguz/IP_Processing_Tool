@@ -405,9 +405,14 @@ namespace IPProcessingTool
 
                             var tasks = new List<Task>();
 
-                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "Hostname" || c.Name == "Machine Model")))
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Hostname"))
                             {
-                                tasks.Add(GetComputerSystemInfoAsync(scope, scanStatus, cancellationToken));
+                                tasks.Add(GetHostnameAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine Model"))
+                            {
+                                tasks.Add(GetMachineModelAsync(scope, scanStatus, cancellationToken));
                             }
 
                             if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Last Logged User"))
@@ -503,26 +508,41 @@ namespace IPProcessingTool
             }
         }
 
-        private async Task GetComputerSystemInfoAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        private async Task GetMachineModelAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
             try
             {
-                var machineQuery = new ObjectQuery("SELECT Name, Model FROM Win32_ComputerSystem");
-                using (var machineSearcher = new ManagementObjectSearcher(scope, machineQuery))
+                var modelQuery = new ObjectQuery("SELECT Version FROM Win32_ComputerSystemProduct");
+                using var modelSearcher = new ManagementObjectSearcher(scope, modelQuery);
+                var model = await Task.Run(() => modelSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+                if (model != null)
                 {
-                    var machine = await Task.Run(() => machineSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                    if (machine != null)
+                    scanStatus.MachineModel = model["Version"]?.ToString() ?? "N/A";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error getting machine model: {ex.Message}", context: "GetMachineModelAsync");
+            }
+        }
+
+        private async Task GetHostnameAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var hostnameQuery = new ObjectQuery("SELECT Name FROM Win32_ComputerSystem");
+                using (var hostnameSearcher = new ManagementObjectSearcher(scope, hostnameQuery))
+                {
+                    var computer = await Task.Run(() => hostnameSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
+                    if (computer != null)
                     {
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Hostname"))
-                            scanStatus.Hostname = machine["Name"]?.ToString() ?? "N/A";
-                        if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "Machine Model"))
-                            scanStatus.MachineModel = machine["Model"]?.ToString() ?? "N/A";
+                        scanStatus.Hostname = computer["Name"]?.ToString() ?? "N/A";
                     }
                 }
             }
             catch (Exception ex)
             {
-                Logger.Log(LogLevel.ERROR, $"Error getting computer system info: {ex.Message}", context: "GetComputerSystemInfoAsync");
+                Logger.Log(LogLevel.ERROR, $"Error getting hostname: {ex.Message}", context: "GetHostnameAsync");
             }
         }
 
