@@ -1,0 +1,43 @@
+# Variables
+$zipFilePath = "\\netapp2b\DSS Interns\IP_Scanner\MyWPFApp.zip"  # Network path to ZIP file
+$targetPath = "C:\Program Files\MyWPFApp"  # Destination folder on the user’s PC
+$shortcutPath = "$([Environment]::GetFolderPath('Desktop'))\MyWPFApp.lnk"  # Shortcut on Desktop
+$exePath = "$targetPath\MyWPFApp.exe"  # Path to the app's executable
+
+# 1. Create target folder if it doesn't exist
+if (!(Test-Path $targetPath)) {
+    New-Item -ItemType Directory -Path $targetPath | Out-Null
+}
+
+# 2. Unzip the application files
+Expand-Archive -Path $zipFilePath -DestinationPath $targetPath -Force
+
+# 3. Create a desktop shortcut
+$WScriptShell = New-Object -ComObject WScript.Shell
+$shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $exePath
+$shortcut.WorkingDirectory = $targetPath
+$shortcut.WindowStyle = 1  # Normal window
+$shortcut.Description = "Shortcut to My WPF App"
+$shortcut.IconLocation = "$exePath,0"  # Optional: use the app's icon
+
+# Optional: Apply a specific icon
+# Uncomment the line below and replace "C:\Path\To\Icon.ico" with the actual path to the icon file.
+# $shortcut.IconLocation = "C:\Path\To\Icon.ico"
+
+$shortcut.Save()
+
+# Optional: Create a Taskbar shortcut
+# Uncomment the lines below to add a Taskbar shortcut.
+# $taskbarShortcutPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\MyWPFApp.lnk"
+# $taskbarShortcut = $WScriptShell.CreateShortcut($taskbarShortcutPath)
+# $taskbarShortcut.TargetPath = $exePath
+# $taskbarShortcut.WorkingDirectory = $targetPath
+# $taskbarShortcut.WindowStyle = 1
+# $taskbarShortcut.Description = "My WPF App Taskbar Shortcut"
+# $taskbarShortcut.IconLocation = "$exePath,0"
+# $taskbarShortcut.Save()
+
+Write-Host "Installation completed. Shortcut created on Desktop."
+# Uncomment the line below if you add a Taskbar shortcut
+# Write-Host "Taskbar shortcut created."
