@@ -15,6 +15,8 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using System.Globalization;
+using System.Net.Sockets;
+
 
 namespace IPProcessingTool
 {
@@ -54,33 +56,41 @@ namespace IPProcessingTool
             Logger.Log(LogLevel.INFO, "Application started");
         }
 
+        // previous code
         private void InitializeColumnSettings()
         {
             dataColumnSettings = new ObservableCollection<ColumnSetting>
-    {
-        new ColumnSetting { Name = "IP Address", IsSelected = true },
-        new ColumnSetting { Name = "Hostname", IsSelected = true },
-        new ColumnSetting { Name = "Last Logged User", IsSelected = false },
-        new ColumnSetting { Name = "Machine Model", IsSelected = false },
-        new ColumnSetting { Name = "Disk Size", IsSelected = true },
-        new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
-        new ColumnSetting { Name = "Other Drives", IsSelected = true },
-        new ColumnSetting { Name = "RAM Size", IsSelected = false },
-        new ColumnSetting { Name = "Windows Info", IsSelected = true },
-        new ColumnSetting { Name = "Microsoft Office Version", IsSelected = false },
-        new ColumnSetting { Name = "BIOS Version Date", IsSelected = true },
-        new ColumnSetting { Name = "SMBIOS Version", IsSelected = true },
-        new ColumnSetting { Name = "Embedded Controller Version", IsSelected = true },
-        new ColumnSetting { Name = "MAC Address", IsSelected = true },
-        new ColumnSetting { Name = "NIC 0 LAN", IsSelected = true },
-        new ColumnSetting { Name = "NIC 1 WiFi", IsSelected = true },
-        new ColumnSetting { Name = "NIC 2 LAN 2", IsSelected = true },
-        new ColumnSetting { Name = "Date", IsSelected = true },
-        new ColumnSetting { Name = "Time", IsSelected = true },
-        new ColumnSetting { Name = "Ping Time", IsSelected = true },
-        new ColumnSetting { Name = "Status", IsSelected = true },
-        new ColumnSetting { Name = "Details", IsSelected = true },
-    };
+            {
+                new ColumnSetting { Name = "IP Address", IsSelected = true },
+                new ColumnSetting { Name = "Hostname", IsSelected = true },
+                new ColumnSetting { Name = "Last Logged User", IsSelected = true },
+                new ColumnSetting { Name = "Machine Model", IsSelected = true },
+                new ColumnSetting { Name = "Disk Size", IsSelected = true },
+                new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
+                new ColumnSetting { Name = "Other Drives", IsSelected = true },
+                new ColumnSetting { Name = "RAM Size", IsSelected = true },
+                new ColumnSetting { Name = "Windows Info", IsSelected = true },
+                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = true },
+                new ColumnSetting { Name = "BIOS Version Date", IsSelected = true },
+                new ColumnSetting { Name = "SMBIOS Version", IsSelected = true },
+                new ColumnSetting { Name = "Embedded Controller Version", IsSelected = true },
+                new ColumnSetting { Name = "MAC Address", IsSelected = true },
+                new ColumnSetting { Name = "NIC 0 LAN", IsSelected = true },
+                new ColumnSetting { Name = "NIC 1 WiFi", IsSelected = true },
+                new ColumnSetting { Name = "NIC 2 LAN 2", IsSelected = true },
+                new ColumnSetting { Name = "Date", IsSelected = true },
+                new ColumnSetting { Name = "Time", IsSelected = true },
+                new ColumnSetting { Name = "Ping Time", IsSelected = true },
+                new ColumnSetting { Name = "Status", IsSelected = true },
+                new ColumnSetting { Name = "Details", IsSelected = true },
+                new ColumnSetting { Name = "Port 16992", IsSelected = true },
+                new ColumnSetting { Name = "Port 16993", IsSelected = true },
+                new ColumnSetting { Name = "Port 22", IsSelected = false },
+                new ColumnSetting { Name = "Port 80", IsSelected = false },
+                new ColumnSetting { Name = "Port 443", IsSelected = false },
+                new ColumnSetting { Name = "Port 3389", IsSelected = false },
+                new ColumnSetting { Name = "Port 5985", IsSelected = false },
+            };
         }
 
         private void UpdateDataGridColumns()
@@ -445,6 +455,11 @@ namespace IPProcessingTool
                             if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "NIC 0 LAN" || c.Name == "NIC 1 WiFi" || c.Name == "NIC 2 LAN 2" || c.Name == "MAC Address")))
                             {
                                 tasks.Add(GetNetworkAdaptersInfoAsync(scope, scanStatus, cancellationToken));
+                            }
+
+                            if (dataColumnSettings.Any(c => c.IsSelected && c.Name.StartsWith("Port ")))
+                            {
+                                tasks.Add(CheckPortsAsync(ip, scanStatus, cancellationToken));
                             }
 
                             await Task.WhenAll(tasks);
@@ -966,6 +981,87 @@ namespace IPProcessingTool
             }
         }
 
+        // new method to add
+        private async Task CheckPortsAsync(string ipAddress, ScanStatus scanStatus, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var portMap = new Dictionary<int, string>
+        {
+            { 16992, nameof(ScanStatus.Port16992) },
+            { 16993, nameof(ScanStatus.Port16993) },
+            { 22, nameof(ScanStatus.Port22) },
+            { 80, nameof(ScanStatus.Port80) },
+            { 443, nameof(ScanStatus.Port443) },
+            { 3389, nameof(ScanStatus.Port3389) },
+            { 5985, nameof(ScanStatus.Port5985) }
+        };
+
+                var portTasks = new List<Task>();
+
+                foreach (var portEntry in portMap)
+                {
+                    int port = portEntry.Key;
+                    string propertyName = portEntry.Value;
+
+                    if (dataColumnSettings.Any(c => c.IsSelected && c.Name == $"Port {port}"))
+                    {
+                        portTasks.Add(Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var result = await IsPortOpenAsync(ipAddress, port, cancellationToken);
+                                typeof(ScanStatus).GetProperty(propertyName).SetValue(
+                                    scanStatus, result ? "Open" : "Closed");
+                            }
+                            catch (Exception ex)
+                            {
+                                typeof(ScanStatus).GetProperty(propertyName).SetValue(
+                                    scanStatus, "Error");
+                                Logger.Log(LogLevel.ERROR, $"Error checking port {port} on {ipAddress}: {ex.Message}",
+                                    context: "CheckPortsAsync");
+                            }
+                        }, cancellationToken));
+                    }
+                }
+
+                await Task.WhenAll(portTasks);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error in port scanning for {ipAddress}: {ex.Message}",
+                    context: "CheckPortsAsync");
+            }
+        }
+
+        private async Task<bool> IsPortOpenAsync(string host, int port, CancellationToken cancellationToken)
+        {
+            try
+            {
+                using (var client = new TcpClient())
+                {
+                    var connectTask = client.ConnectAsync(host, port);
+                    var timeoutTask = Task.Delay(2000, cancellationToken); // 2 second timeout
+
+                    var completedTask = await Task.WhenAny(connectTask, timeoutTask);
+
+                    if (completedTask == timeoutTask)
+                    {
+                        return false; // Connection timed out
+                    }
+
+                    // Make sure the connection task completed without exception
+                    await connectTask;
+
+                    return client.Connected;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private void UpdateScanStatus(ScanStatus scanStatus)
         {
             Dispatcher.Invoke(() =>
@@ -1190,6 +1286,13 @@ namespace IPProcessingTool
             public string NIC0LAN { get; set; }
             public string NIC1WiFi { get; set; }
             public string NIC2LAN2 { get; set; }
+            public string Port16992 { get; set; }
+            public string Port16993 { get; set; }
+            public string Port22 { get; set; }
+            public string Port80 { get; set; }
+            public string Port443 { get; set; }
+            public string Port3389 { get; set; }
+            public string Port5985 { get; set; }
 
             public ScanStatus()
             {
@@ -1215,6 +1318,13 @@ namespace IPProcessingTool
                 NIC0LAN = "N/A";
                 NIC1WiFi = "N/A";
                 NIC2LAN2 = "N/A";
+                Port16992 = "N/A";
+                Port16993 = "N/A";
+                Port22 = "N/A";
+                Port80 = "N/A";
+                Port443 = "N/A";
+                Port3389 = "N/A";
+                Port5985 = "N/A";
             }
         }
     }
