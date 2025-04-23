@@ -29,6 +29,7 @@ namespace IPProcessingTool
         private ObservableCollection<ColumnSetting> dataColumnSettings;
         private bool autoSave;
         private int pingTimeout = 1000; // Default value in milliseconds
+        private Dictionary<string, string> floorMappings;
         private int totalIPs;
         private int processedIPs;
         private int MaxConcurrentScans = Environment.ProcessorCount; // Default to number of processor cores
@@ -50,6 +51,7 @@ namespace IPProcessingTool
             dataColumnSettings = new ObservableCollection<ColumnSetting>();
             autoSave = false; // Default value
 
+            InitializeFloorMappings();
             InitializeColumnSettings();
             UpdateDataGridColumns();
 
@@ -90,6 +92,8 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "Port 443", IsSelected = false },
                 new ColumnSetting { Name = "Port 3389", IsSelected = false },
                 new ColumnSetting { Name = "Port 5985", IsSelected = false },
+                new ColumnSetting { Name = "Floor", IsSelected = true },
+
             };
         }
 
@@ -349,7 +353,8 @@ namespace IPProcessingTool
                 Status = "Processing",
                 Details = "",
                 Date = DateTime.Now.ToString("M/dd/yyyy"),
-                Time = DateTime.Now.ToString("HH:mm:ss")
+                Time = DateTime.Now.ToString("HH:mm:ss"),
+                Floor = dataColumnSettings.Any(c => c.IsSelected && c.Name == "Floor") ? GetFloorForIP(ip) : "N/A"
             };
 
             try
@@ -1062,6 +1067,42 @@ namespace IPProcessingTool
             }
         }
 
+        private void InitializeFloorMappings()
+        {
+            floorMappings = new Dictionary<string, string>
+    {
+        { "10.9.115", "30 Hudson 20 east" },
+        { "10.9.97", "30 Hudson 25 west" },
+        { "10.9.107", "30 Hudson 25 west" },
+        { "10.9.96", "30 Hudson 25 east" },
+        { "10.9.99", "30 Hudson 26 west" },
+        { "10.9.109", "30 Hudson 26 west" }
+        // Add more mappings as needed
+    };
+        }
+
+        private string GetFloorForIP(string ipAddress)
+        {
+            try
+            {
+                string[] parts = ipAddress.Split('.');
+                if (parts.Length >= 3)
+                {
+                    string segment = $"{parts[0]}.{parts[1]}.{parts[2]}";
+                    if (floorMappings.TryGetValue(segment, out string floor))
+                    {
+                        return floor;
+                    }
+                }
+                return "Unknown";
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Error determining floor for IP {ipAddress}: {ex.Message}", context: "GetFloorForIP");
+                return "Error";
+            }
+        }
+
         private void UpdateScanStatus(ScanStatus scanStatus)
         {
             Dispatcher.Invoke(() =>
@@ -1293,6 +1334,7 @@ namespace IPProcessingTool
             public string Port443 { get; set; }
             public string Port3389 { get; set; }
             public string Port5985 { get; set; }
+            public string Floor { get; set; }
 
             public ScanStatus()
             {
@@ -1325,6 +1367,7 @@ namespace IPProcessingTool
                 Port443 = "N/A";
                 Port3389 = "N/A";
                 Port5985 = "N/A";
+                Floor = "N/A";
             }
         }
     }
