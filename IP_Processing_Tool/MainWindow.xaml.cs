@@ -93,7 +93,6 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "Port 3389", IsSelected = false },
                 new ColumnSetting { Name = "Port 5985", IsSelected = false },
                 new ColumnSetting { Name = "Floor", IsSelected = true },
-
             };
         }
 
@@ -1070,15 +1069,26 @@ namespace IPProcessingTool
         private void InitializeFloorMappings()
         {
             floorMappings = new Dictionary<string, string>
-    {
-        { "10.9.115", "30 Hudson 20 east" },
-        { "10.9.97", "30 Hudson 25 west" },
-        { "10.9.107", "30 Hudson 25 west" },
-        { "10.9.96", "30 Hudson 25 east" },
-        { "10.9.99", "30 Hudson 26 west" },
-        { "10.9.109", "30 Hudson 26 west" }
-        // Add more mappings as needed
-    };
+            {
+                { "10.9.115", "30 Hudson 20 east" },
+                { "10.9.116", "30 Hudson 20 west" },
+                { "10.9.97",  "30 Hudson 25 west" },
+                { "10.9.107", "30 Hudson 25 west" },
+                { "10.9.96",  "30 Hudson 25 east" },
+                { "10.9.99",  "30 Hudson 26 west" },
+                { "10.9.109", "30 Hudson 26 west" },
+                { "10.9.108", "30 Hudson 26 east" },
+                { "10.9.101", "30 Hudson 27 west" },
+                { "10.9.111", "30 Hudson 27 west" },
+                { "10.9.114", "30 Hudson 27 west" },
+                { "10.9.100", "30 Hudson 27 east" },
+                { "10.9.110", "30 Hudson 27 east" },
+                { "10.9.103", "30 Hudson 28 west" },
+                { "10.9.102", "30 Hudson 28 east" },
+                { "10.9.105", "30 Hudson 29 west" },
+                { "10.9.104", "30 Hudson 29 east" },
+                { "10.9.106", "30 Hudson 30 west" },
+            };
         }
 
         private string GetFloorForIP(string ipAddress)
