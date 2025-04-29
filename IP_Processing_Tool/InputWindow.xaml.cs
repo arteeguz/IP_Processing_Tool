@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Net;
@@ -58,12 +59,61 @@ namespace IPProcessingTool
             InputLabel.Content = labelText;
             InputTextBox.TextChanged += InputTextBox_TextChanged;
             InputTextBox.PreviewTextInput += InputTextBox_PreviewTextInput;
+            InputTextBox.PreviewKeyDown += InputTextBox_PreviewKeyDown;
             this.isSegment = isSegment;
+
+            // Update IP count display
+            UpdateIPCountLabel();
+
+            // Set up keyboard shortcuts
+            AddKeyboardShortcuts();
+        }
+
+        private void AddKeyboardShortcuts()
+        {
+            // Ctrl+V for paste handling - already works natively but we'll look for it
+            // to provide visual feedback
+            InputWindow window = this;
+            window.KeyDown += (s, e) => {
+                if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
+                {
+                    // The default paste behavior will trigger the TextChanged event
+                    ErrorMessage = "Processing paste...";
+                }
+            };
+
+            // Handle Ctrl+A to select all text in InputTextBox
+            InputTextBox.KeyDown += (s, e) => {
+                if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
+                {
+                    InputTextBox.SelectAll();
+                    e.Handled = true;
+                }
+            };
+        }
+
+        private void InputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            // Add support for Enter key to add the current IP
+            if (e.Key == Key.Enter)
+            {
+                AddButton_Click(sender, e);
+                e.Handled = true;
+            }
         }
 
         private void InputTextBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             string input = InputTextBox.Text;
+
+            // Check if the input contains line breaks or multiple IPs separated by common delimiters
+            if (ContainsMultipleIPs(input))
+            {
+                // We have a bulk paste operation - process it
+                ProcessBulkInput(input);
+                return;
+            }
+
             int caretIndex = InputTextBox.CaretIndex;
 
             // Only format if we're adding characters, not deleting
@@ -76,6 +126,81 @@ namespace IPProcessingTool
             InputTextBox.CaretIndex = caretIndex;
 
             ValidateInput();
+        }
+
+        private bool ContainsMultipleIPs(string input)
+        {
+            // Excel content typically contains line breaks, but we'll check all common delimiters
+            if (input.Contains('\n') || input.Contains('\r') ||
+                input.Contains(Environment.NewLine) ||
+                input.Contains(",") ||
+                input.Contains(";") ||
+                input.Contains("\t"))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private void UpdateIPCountLabel()
+        {
+            int count = IPListBox.Items.Count;
+            IPCountLabel.Text = $"Total IPs in list: {count}";
+        }
+
+        private void ProcessBulkInput(string input)
+        {
+            // Split the input with various delimiters including Excel's line break formats
+            string[] delimiters = new[] { "\r\n", "\r", "\n", ",", ";", "\t" };
+            string[] potentialIPs = input.Split(delimiters, StringSplitOptions.RemoveEmptyEntries);
+
+            int validCount = 0;
+            int invalidCount = 0;
+
+            foreach (string ip in potentialIPs)
+            {
+                string trimmedIP = ip.Trim();
+                if (string.IsNullOrWhiteSpace(trimmedIP))
+                    continue;
+
+                (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(trimmedIP) : ValidateIP(trimmedIP);
+
+                if (isValid)
+                {
+                    IPListBox.Items.Add(trimmedIP);
+                    validCount++;
+                }
+                else
+                {
+                    invalidCount++;
+                    Logger.Log(LogLevel.WARNING, $"Invalid {(isSegment ? "IP segment" : "IP address")}: {trimmedIP}",
+                        context: "ProcessBulkInput", additionalInfo: errorMessage);
+                }
+            }
+
+            // Clear the text box after processing
+            InputTextBox.Clear();
+
+            // Update IP count label
+            UpdateIPCountLabel();
+
+            // Update status message
+            if (validCount > 0 && invalidCount == 0)
+            {
+                ErrorMessage = $"{validCount} valid {(isSegment ? "IP segments" : "IP addresses")} added successfully.";
+                InputTextBoxBorderBrush = Brushes.Green;
+            }
+            else if (validCount > 0 && invalidCount > 0)
+            {
+                ErrorMessage = $"{validCount} valid and {invalidCount} invalid entries found. Only valid entries were added.";
+                InputTextBoxBorderBrush = Brushes.Orange;
+            }
+            else if (validCount == 0 && invalidCount > 0)
+            {
+                ErrorMessage = $"No valid {(isSegment ? "IP segments" : "IP addresses")} found in pasted content.";
+                InputTextBoxBorderBrush = Brushes.Red;
+            }
         }
 
         private (string formattedInput, int newCaretIndex) FormatInputWithDots(string input, int caretIndex)
@@ -184,6 +309,33 @@ namespace IPProcessingTool
             return (true, null);
         }
 
+        private void PasteButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Get clipboard content
+                if (Clipboard.ContainsText())
+                {
+                    string clipboardText = Clipboard.GetText();
+
+                    // Process the clipboard content directly
+                    if (!string.IsNullOrWhiteSpace(clipboardText))
+                    {
+                        ProcessBulkInput(clipboardText);
+                    }
+                }
+                else
+                {
+                    ErrorMessage = "No text content found in clipboard.";
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error accessing clipboard: {ex.Message}";
+                Logger.Log(LogLevel.ERROR, $"Clipboard access error: {ex.Message}", context: "PasteButton_Click");
+            }
+        }
+
         private void AddButton_Click(object sender, RoutedEventArgs e)
         {
             string input = InputTextBox.Text.Trim();
@@ -224,6 +376,25 @@ namespace IPProcessingTool
         {
             DialogResult = false;
             Close();
+        }
+
+        private void ClearList_Click(object sender, RoutedEventArgs e)
+        {
+            if (IPListBox.Items.Count > 0)
+            {
+                var result = MessageBox.Show($"Are you sure you want to clear all {IPListBox.Items.Count} items?",
+                    "Confirm Clear", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    IPListBox.Items.Clear();
+                    ErrorMessage = "List cleared.";
+                }
+            }
+            else
+            {
+                ErrorMessage = "List is already empty.";
+            }
         }
 
         protected void OnPropertyChanged(string name)
