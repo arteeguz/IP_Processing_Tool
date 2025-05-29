@@ -114,16 +114,20 @@ namespace IPProcessingTool
                 return;
             }
 
-            int caretIndex = InputTextBox.CaretIndex;
-
-            // Only format if we're adding characters, not deleting
-            if (e.Changes.Any(change => change.AddedLength > 0))
+            // For single entries, only auto-format if it looks like an IP (contains dots or all numbers)
+            if (input.Contains('.') || Regex.IsMatch(input, @"^\d+$"))
             {
-                (input, caretIndex) = FormatInputWithDots(input, caretIndex);
-            }
+                int caretIndex = InputTextBox.CaretIndex;
 
-            InputTextBox.Text = input;
-            InputTextBox.CaretIndex = caretIndex;
+                // Only format if we're adding characters, not deleting
+                if (e.Changes.Any(change => change.AddedLength > 0))
+                {
+                    (input, caretIndex) = FormatInputWithDots(input, caretIndex);
+                }
+
+                InputTextBox.Text = input;
+                InputTextBox.CaretIndex = caretIndex;
+            }
 
             ValidateInput();
         }
@@ -146,7 +150,7 @@ namespace IPProcessingTool
         private void UpdateIPCountLabel()
         {
             int count = IPListBox.Items.Count;
-            IPCountLabel.Text = $"Total IPs in list: {count}";
+            IPCountLabel.Text = isSegment ? $"Total segments in list: {count}" : $"Total IPs/Hostnames in list: {count}";
         }
 
         private void ProcessBulkInput(string input)
@@ -164,7 +168,7 @@ namespace IPProcessingTool
                 if (string.IsNullOrWhiteSpace(trimmedIP))
                     continue;
 
-                (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(trimmedIP) : ValidateIP(trimmedIP);
+                (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(trimmedIP) : ValidateIPOrHostname(trimmedIP);
 
                 if (isValid)
                 {
@@ -174,7 +178,7 @@ namespace IPProcessingTool
                 else
                 {
                     invalidCount++;
-                    Logger.Log(LogLevel.WARNING, $"Invalid {(isSegment ? "IP segment" : "IP address")}: {trimmedIP}",
+                    Logger.Log(LogLevel.WARNING, $"Invalid {(isSegment ? "IP segment" : "IP address/hostname")}: {trimmedIP}",
                         context: "ProcessBulkInput", additionalInfo: errorMessage);
                 }
             }
@@ -188,7 +192,7 @@ namespace IPProcessingTool
             // Update status message
             if (validCount > 0 && invalidCount == 0)
             {
-                ErrorMessage = $"{validCount} valid {(isSegment ? "IP segments" : "IP addresses")} added successfully.";
+                ErrorMessage = $"{validCount} valid {(isSegment ? "IP segments" : "entries")} added successfully.";
                 InputTextBoxBorderBrush = Brushes.Green;
             }
             else if (validCount > 0 && invalidCount > 0)
@@ -198,13 +202,19 @@ namespace IPProcessingTool
             }
             else if (validCount == 0 && invalidCount > 0)
             {
-                ErrorMessage = $"No valid {(isSegment ? "IP segments" : "IP addresses")} found in pasted content.";
+                ErrorMessage = $"No valid {(isSegment ? "IP segments" : "entries")} found in pasted content.";
                 InputTextBoxBorderBrush = Brushes.Red;
             }
         }
 
         private (string formattedInput, int newCaretIndex) FormatInputWithDots(string input, int caretIndex)
         {
+            // Only format if input looks like an IP address (contains numbers and dots)
+            if (!Regex.IsMatch(input.Replace(".", ""), @"^\d*$"))
+            {
+                return (input, caretIndex); // Return unchanged if it contains non-numeric characters (likely a hostname)
+            }
+
             string[] parts = input.Split('.');
             string formattedInput = "";
             int newCaretIndex = caretIndex;
@@ -241,11 +251,22 @@ namespace IPProcessingTool
         private void InputTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
         {
             string currentText = InputTextBox.Text;
-            int dotCount = currentText.Count(c => c == '.');
-            bool isNumberOrDot = Regex.IsMatch(e.Text, "[0-9.]");
 
-            // Prevent further input if it's a dot and there are already 2 dots (for segments), or if it's not a valid character
-            if ((e.Text == "." && dotCount >= (isSegment ? 2 : 3)) || !isNumberOrDot)
+            // Allow alphanumeric, dots, and hyphens for hostnames
+            bool isValidChar = Regex.IsMatch(e.Text, "[0-9a-zA-Z.-]");
+
+            // For segments, restrict to numbers and dots only
+            if (isSegment)
+            {
+                int dotCount = currentText.Count(c => c == '.');
+                bool isNumberOrDot = Regex.IsMatch(e.Text, "[0-9.]");
+
+                if ((e.Text == "." && dotCount >= 2) || !isNumberOrDot)
+                {
+                    e.Handled = true;
+                }
+            }
+            else if (!isValidChar)
             {
                 e.Handled = true;
             }
@@ -254,7 +275,7 @@ namespace IPProcessingTool
         private void ValidateInput()
         {
             string input = InputTextBox.Text.Trim();
-            (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(input) : ValidateIP(input);
+            (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(input) : ValidateIPOrHostname(input);
 
             if (isValid)
             {
@@ -268,6 +289,24 @@ namespace IPProcessingTool
                 ErrorMessage = errorMessage;
                 InputTextBoxToolTip = errorMessage;
             }
+        }
+
+        private (bool isValid, string errorMessage) ValidateIPOrHostname(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return (false, "Input cannot be empty.");
+
+            // First try to validate as IP
+            var (isValidIP, ipError) = ValidateIP(input);
+            if (isValidIP)
+                return (true, null);
+
+            // If not a valid IP, check if it's a valid hostname
+            var (isValidHostname, hostnameError) = ValidateHostname(input);
+            if (isValidHostname)
+                return (true, null);
+
+            return (false, "Invalid IP address or hostname format.");
         }
 
         private (bool isValid, string errorMessage) ValidateIP(string ip)
@@ -287,6 +326,23 @@ namespace IPProcessingTool
                 if (!byte.TryParse(part, out byte b))
                     return (false, $"'{part}' is not a valid number between 0 and 255.");
             }
+
+            return (true, null);
+        }
+
+        private (bool isValid, string errorMessage) ValidateHostname(string hostname)
+        {
+            if (string.IsNullOrWhiteSpace(hostname))
+                return (false, "Hostname cannot be empty.");
+
+            // Basic hostname validation - RFC 1123
+            if (hostname.Length > 253)
+                return (false, "Hostname is too long (max 253 characters).");
+
+            // Check for valid hostname pattern
+            string hostnamePattern = @"^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$";
+            if (!Regex.IsMatch(hostname, hostnamePattern))
+                return (false, "Invalid hostname format. Hostnames can only contain letters, numbers, hyphens, and dots.");
 
             return (true, null);
         }
@@ -339,7 +395,7 @@ namespace IPProcessingTool
         private void AddButton_Click(object sender, RoutedEventArgs e)
         {
             string input = InputTextBox.Text.Trim();
-            (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(input) : ValidateIP(input);
+            (bool isValid, string errorMessage) = isSegment ? ValidateIPSegment(input) : ValidateIPOrHostname(input);
 
             if (isValid)
             {
@@ -348,6 +404,7 @@ namespace IPProcessingTool
                 InputTextBoxBorderBrush = Brushes.Gray;
                 InputTextBoxToolTip = null;
                 ErrorMessage = null;
+                UpdateIPCountLabel();
             }
             else
             {
@@ -368,7 +425,7 @@ namespace IPProcessingTool
             }
             else
             {
-                MessageBox.Show("No IPs added. Please enter at least one IP address or segment.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"No {(isSegment ? "segments" : "IPs/hostnames")} added. Please enter at least one {(isSegment ? "IP segment" : "IP address or hostname")}.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -389,6 +446,7 @@ namespace IPProcessingTool
                 {
                     IPListBox.Items.Clear();
                     ErrorMessage = "List cleared.";
+                    UpdateIPCountLabel();
                 }
             }
             else

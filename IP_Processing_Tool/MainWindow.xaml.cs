@@ -145,9 +145,36 @@ namespace IPProcessingTool
             }
         }
 
-        private async Task ProcessIPsAsync(IEnumerable<string> ips)
+        private async Task ProcessIPsAsync(IEnumerable<string> ipsOrHostnames)
         {
-            totalIPs = ips.Count();
+            var resolvedIPs = new List<(string original, string resolved)>();
+
+            // First, resolve all hostnames to IPs
+            UpdateStatusBar("Resolving hostnames...");
+            foreach (var entry in ipsOrHostnames)
+            {
+                var resolvedIP = await ResolveHostnameToIPAsync(entry);
+                if (!string.IsNullOrEmpty(resolvedIP))
+                {
+                    resolvedIPs.Add((entry, resolvedIP));
+                }
+                else
+                {
+                    // Add failed resolution to the grid immediately
+                    var failedStatus = new ScanStatus
+                    {
+                        IPAddress = entry,
+                        Hostname = entry,
+                        Status = "Resolution Failed",
+                        Details = "Could not resolve hostname to IP address",
+                        Date = DateTime.Now.ToString("M/dd/yyyy"),
+                        Time = DateTime.Now.ToString("HH:mm:ss")
+                    };
+                    UpdateScanStatus(failedStatus);
+                }
+            }
+
+            totalIPs = resolvedIPs.Count;
             processedIPs = 0;
             UpdateProgressBar(0);
 
@@ -159,16 +186,21 @@ namespace IPProcessingTool
             try
             {
                 var tasks = new List<Task>();
-                foreach (var ip in ips)
+                foreach (var (original, resolved) in resolvedIPs)
                 {
                     await semaphore.WaitAsync(cancellationTokenSource.Token);
                     tasks.Add(Task.Run(async () =>
                     {
                         try
                         {
-                            var scanStatus = await ProcessIPAsync(ip, cancellationTokenSource.Token);
+                            var scanStatus = await ProcessIPAsync(resolved, cancellationTokenSource.Token);
                             if (scanStatus != null)
                             {
+                                // If we resolved a hostname, update the hostname field
+                                if (original != resolved && !IPAddress.TryParse(original, out _))
+                                {
+                                    scanStatus.Hostname = original;
+                                }
                                 UpdateScanStatus(scanStatus);
                             }
                             Interlocked.Increment(ref processedIPs);
@@ -204,6 +236,43 @@ namespace IPProcessingTool
                 });
 
                 HandleAutoSave();
+            }
+        }
+
+        private async Task<string> ResolveHostnameToIPAsync(string hostnameOrIP)
+        {
+            try
+            {
+                // First check if it's already an IP address
+                if (IPAddress.TryParse(hostnameOrIP, out _))
+                {
+                    return hostnameOrIP;
+                }
+
+                // Try to resolve hostname to IP
+                var hostEntry = await Dns.GetHostEntryAsync(hostnameOrIP);
+
+                // Get the first IPv4 address
+                var ipv4 = hostEntry.AddressList.FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork);
+                if (ipv4 != null)
+                {
+                    return ipv4.ToString();
+                }
+
+                // If no IPv4, try IPv6
+                var ipv6 = hostEntry.AddressList.FirstOrDefault();
+                if (ipv6 != null)
+                {
+                    return ipv6.ToString();
+                }
+
+                Logger.Log(LogLevel.WARNING, $"No IP addresses found for hostname: {hostnameOrIP}", context: "ResolveHostnameToIPAsync");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.ERROR, $"Failed to resolve hostname '{hostnameOrIP}': {ex.Message}", context: "ResolveHostnameToIPAsync");
+                return null;
             }
         }
 
@@ -260,12 +329,12 @@ namespace IPProcessingTool
 
         private async void Button1_Click(object sender, RoutedEventArgs e)
         {
-            var inputWindow = new InputWindow("Enter the IP address:", false);
+            var inputWindow = new InputWindow("Enter IP address or hostname:", false);
             if (inputWindow.ShowDialog() == true)
             {
-                string[] ips = inputWindow.InputText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
-                Logger.Log(LogLevel.INFO, "User input IP addresses", context: "Button1_Click", additionalInfo: string.Join(", ", ips));
-                await ProcessIPsAsync(ips);
+                string[] entries = inputWindow.InputText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                Logger.Log(LogLevel.INFO, "User input IP addresses/hostnames", context: "Button1_Click", additionalInfo: string.Join(", ", entries));
+                await ProcessIPsAsync(entries);
             }
         }
 
