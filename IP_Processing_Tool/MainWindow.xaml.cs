@@ -895,7 +895,8 @@ namespace IPProcessingTool
                 byte[] macAddr = new byte[6];
                 uint macAddrLen = (uint)macAddr.Length;
 
-                if (SendARP((int)ip.Address, 0, macAddr, ref macAddrLen) != 0)
+                int destIp = BitConverter.ToInt32(ip.GetAddressBytes(), 0);
+                if (SendARP(destIp, 0, macAddr, ref macAddrLen) != 0)
                 {
                     return "Not Available";
                 }
