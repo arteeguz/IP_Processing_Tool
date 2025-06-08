@@ -1054,7 +1054,7 @@ namespace IPProcessingTool
             }
         }
 
-        // new method to add
+        // Checks specified ports and updates scan results
         private async Task CheckPortsAsync(string ipAddress, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
             try
