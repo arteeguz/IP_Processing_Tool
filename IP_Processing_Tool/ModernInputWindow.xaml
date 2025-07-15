@@ -1,7 +1,7 @@
 ﻿<Window x:Class="IPProcessingTool.ModernInputWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Smart IP Scanner Input" Height="700" Width="800" Background="#F8F9FA" WindowStartupLocation="CenterScreen">
+        Title="Smart IP Scanner Input" Height="500" Width="800" Background="#F8F9FA" WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <Style TargetType="Button">
             <Setter Property="Margin" Value="5"/>
@@ -54,31 +54,10 @@
                 </Setter.Value>
             </Setter>
         </Style>
-
-        <Style TargetType="ListBox">
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="BorderBrush" Value="#DDD"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ListBox">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
-                            <ScrollViewer>
-                                <ItemsPresenter/>
-                            </ScrollViewer>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
     </Window.Resources>
 
     <Grid Margin="30">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -96,7 +75,10 @@
         <GroupBox Grid.Row="1" Header="Input Targets" Margin="0,0,0,20" Padding="15">
             <GroupBox.HeaderTemplate>
                 <DataTemplate>
-                    <TextBlock Text="{Binding}" FontWeight="Bold" FontSize="16" Foreground="#005A9E"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding}" FontWeight="Bold" FontSize="16" Foreground="#005A9E"/>
+                        <TextBlock Name="CountLabel" Text="" FontWeight="Bold" FontSize="14" Foreground="#28A745" Margin="10,0,0,0"/>
+                    </StackPanel>
                 </DataTemplate>
             </GroupBox.HeaderTemplate>
 
@@ -130,41 +112,17 @@
                     <TextBlock Name="SelectedFileLabel" Text="No file selected" VerticalAlignment="Center" 
                                Foreground="#666" FontStyle="Italic"/>
                 </StackPanel>
+
+                <!-- Estimation Display -->
+                <StackPanel Orientation="Horizontal" Margin="0,15,0,0" HorizontalAlignment="Center">
+                    <TextBlock Name="EstimateLabel" Text="" FontSize="12" Foreground="#666" 
+                               TextWrapping="Wrap" FontStyle="Italic"/>
+                </StackPanel>
             </StackPanel>
         </GroupBox>
 
-        <!-- Preview Section -->
-        <GroupBox Grid.Row="2" Header="Scan Preview" Margin="0,0,0,20" Padding="15">
-            <GroupBox.HeaderTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="{Binding}" FontWeight="Bold" FontSize="16" Foreground="#005A9E"/>
-                        <TextBlock Name="CountLabel" Text="" FontWeight="Bold" FontSize="14" Foreground="#28A745" Margin="10,0,0,0"/>
-                    </StackPanel>
-                </DataTemplate>
-            </GroupBox.HeaderTemplate>
-
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <ListBox Name="PreviewListBox" Grid.Column="0" Margin="0,0,10,0"/>
-
-                <StackPanel Grid.Column="1" Width="120">
-                    <Button Name="ProcessInputButton" Content="➕ Process Input" Click="ProcessInput_Click" 
-                            Background="#007BFF" Margin="0,0,0,10"/>
-                    <Button Name="ClearPreviewButton" Content="🗑️ Clear All" Click="ClearPreview_Click" 
-                            Background="#DC3545"/>
-                    <TextBlock Name="EstimateLabel" Text="" FontSize="11" Foreground="#666" 
-                               TextWrapping="Wrap" Margin="0,10,0,0"/>
-                </StackPanel>
-            </Grid>
-        </GroupBox>
-
         <!-- Status Messages -->
-        <Border Grid.Row="3" Background="#E3F2FD" BorderBrush="#2196F3" BorderThickness="1" 
+        <Border Grid.Row="2" Background="#E3F2FD" BorderBrush="#2196F3" BorderThickness="1" 
                 CornerRadius="6" Padding="10" Margin="0,0,0,20" Name="StatusBorder" Visibility="Collapsed">
             <StackPanel>
                 <TextBlock Name="StatusTitle" FontWeight="Bold" FontSize="14"/>
@@ -173,11 +131,18 @@
         </Border>
 
         <!-- Action Buttons -->
-        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Center">
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Center">
+            <Button Name="ProcessInputButton" Content="➕ Process Input" Click="ProcessInput_Click" 
+                    Background="#007BFF" Width="130" Margin="0,0,10,0"/>
+            <Button Name="ClearPreviewButton" Content="🗑️ Clear All" Click="ClearPreview_Click" 
+                    Background="#DC3545" Width="100" Margin="0,0,15,0"/>
             <Button Name="StartScanButton" Content="🚀 Start Scan" Click="StartScan_Click" 
                     Background="#007BFF" Width="120" Margin="0,0,15,0" IsEnabled="False"/>
             <Button Name="CancelButton" Content="❌ Cancel" Click="Cancel_Click" 
                     Background="#6C757D" Width="100"/>
         </StackPanel>
+
+        <!-- Hidden elements for compatibility -->
+        <ListBox Name="PreviewListBox" Visibility="Collapsed"/>
     </Grid>
 </Window>

@@ -60,37 +60,36 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
 
-        <StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Top" Grid.Row="0" Margin="0,0,0,0" Grid.RowSpan="2">
+        <!-- Header Section with Logo and Main Buttons -->
+        <StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Top" Grid.Row="0" Margin="0,10,0,20">
             <Image Source="pack://application:,,,/images/RBC-Logo.png" Width="200" Height="100" Margin="10"/>
             <Label Content="IP Processing Tool" FontSize="24" FontWeight="Bold" Foreground="#005A9E" HorizontalAlignment="Center"/>
             <Label Content="Welcome to RBC Capital Markets' IP Processing Tool" 
-                   FontSize="14" Foreground="#005A9E" Margin="10" HorizontalAlignment="Center" Width="334"/>
+                   FontSize="14" Foreground="#005A9E" Margin="10,0,10,20" HorizontalAlignment="Center"/>
 
-            <StackPanel Orientation="Vertical" HorizontalAlignment="Center" Margin="0,20,0,0">
-                <Button Name="ScanButton" Content="🔍 Start Scan" Click="ScanButton_Click" Style="{StaticResource ScanButtonStyle}"/>
-                <TextBlock Text="Scan IPs, hostnames, ranges, segments, or upload files" 
-                          FontSize="12" Foreground="#666666" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+            <!-- Main Action Buttons -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,10">
+                <Button Name="ScanButton" Content="🔍 Start Scan" Click="ScanButton_Click" Style="{StaticResource ScanButtonStyle}" Margin="0,0,15,0"/>
+                <Button Name="SettingsButton" Content="⚙ Settings" Click="SettingsButton_Click" Style="{StaticResource SettingsButtonStyle}"/>
             </StackPanel>
+
+            <TextBlock Text="Scan IPs, hostnames, ranges, segments, or upload files" 
+                      FontSize="12" Foreground="#666666" HorizontalAlignment="Center" Margin="0,5,0,0"/>
         </StackPanel>
 
-        <Button Name="SettingsButton" Content="⚙ Settings" Click="SettingsButton_Click" 
-                Style="{StaticResource SettingsButtonStyle}"
-                VerticalAlignment="Top" HorizontalAlignment="Right"
-                Margin="0,20,60,0" Width="88"/>
-
-        <DataGrid Name="StatusDataGrid" Grid.Row="1" Grid.ColumnSpan="2" Margin="20,221,20,10" 
+        <!-- Data Grid -->
+        <DataGrid Name="StatusDataGrid" Grid.Row="1" Margin="20,10,20,10" 
                   AutoGenerateColumns="False" IsReadOnly="True" CanUserResizeColumns="True"
                   SelectionMode="Extended" SelectionUnit="FullRow">
             <!-- DataGrid columns are dynamically generated in code-behind -->
         </DataGrid>
+
+        <!-- Progress Bar -->
         <ProgressBar Name="ProgressBar" Grid.Row="2" Height="20" Margin="10"/>
 
-        <StatusBar Grid.Row="3" Grid.Column="0">
+        <!-- Status Bar -->
+        <StatusBar Grid.Row="3">
             <StatusBar.ItemsPanel>
                 <ItemsPanelTemplate>
                     <Grid>

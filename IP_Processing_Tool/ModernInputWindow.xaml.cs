@@ -143,17 +143,23 @@ namespace IPProcessingTool
                     }
                 }
 
-                // Add to preview
+                // Add to preview (background processing)
+                int previousCount = previewItems.Count;
                 foreach (var target in newTargets)
                 {
                     previewItems.Add(target);
                 }
 
-                UpdatePreviewList();
+                UpdateUI();
 
-                if (newTargets.Count > 0)
+                int addedCount = previewItems.Count - previousCount;
+                if (addedCount > 0)
                 {
-                    ShowStatus("✅ Success", $"Added {newTargets.Count} new targets. Total: {previewItems.Count}", "#4CAF50");
+                    ShowStatus("✅ Success", $"Added {addedCount} new targets. Total: {previewItems.Count} targets ready to scan", "#4CAF50");
+                }
+                else if (newTargets.Count > 0)
+                {
+                    ShowStatus("ℹ️ Info", "All targets were already in the list", "#2196F3");
                 }
                 else
                 {
@@ -169,8 +175,8 @@ namespace IPProcessingTool
         private void ClearPreview_Click(object sender, RoutedEventArgs e)
         {
             previewItems.Clear();
-            UpdatePreviewList();
-            ShowStatus("ℹ️ Info", "Preview cleared", "#2196F3");
+            UpdateUI();
+            ShowStatus("ℹ️ Info", "All targets cleared", "#2196F3");
         }
 
         private void StartScan_Click(object sender, RoutedEventArgs e)
@@ -378,30 +384,9 @@ namespace IPProcessingTool
             }
         }
 
-        private void UpdatePreviewList()
-        {
-            if (PreviewListBox != null)
-            {
-                PreviewListBox.Items.Clear();
-                var sortedItems = previewItems.OrderBy(item => item).ToList();
-
-                foreach (var item in sortedItems.Take(1000)) // Limit display to first 1000 items
-                {
-                    PreviewListBox.Items.Add(item);
-                }
-
-                if (previewItems.Count > 1000)
-                {
-                    PreviewListBox.Items.Add($"... and {previewItems.Count - 1000} more items");
-                }
-            }
-
-            UpdateUI();
-        }
-
         private void UpdateUI()
         {
-            // Update count label
+            // Update count label in the header
             if (FindName("CountLabel") is TextBlock countLabel)
             {
                 countLabel.Text = previewItems.Count > 0 ? $"({previewItems.Count} targets)" : "";
@@ -411,7 +396,7 @@ namespace IPProcessingTool
             if (EstimateLabel != null)
             {
                 EstimateLabel.Text = previewItems.Count > 0 ?
-                    $"Est. scan time:\n~{CalculateEstimatedTime(previewItems.Count)}" : "";
+                    $"Estimated scan time: ~{CalculateEstimatedTime(previewItems.Count)}" : "";
             }
 
             // Enable/disable start scan button with null check
