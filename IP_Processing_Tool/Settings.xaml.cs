@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace IPProcessingTool
 {
@@ -20,18 +22,68 @@ namespace IPProcessingTool
         public Settings(ObservableCollection<ColumnSetting> currentDataColumns, bool autoSave, int pingTimeout, int maxConcurrentScans, int executionTimeLimit)
         {
             InitializeComponent();
+
+            // Initialize data
             originalDataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns);
             DataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, IsSelected = c.IsSelected }));
             DataColumnsList.ItemsSource = DataColumns;
+
             AutoSave = autoSave;
             PingTimeout = pingTimeout == 0 ? 3000 : pingTimeout; // Use 3000ms if not set
-            MaxConcurrentScans = maxConcurrentScans;
-            ExecutionTimeLimit = executionTimeLimit;
+            MaxConcurrentScans = maxConcurrentScans == 0 ? Environment.ProcessorCount : maxConcurrentScans; // Use processor count if not set
+            ExecutionTimeLimit = executionTimeLimit == 0 ? 60 : executionTimeLimit; // Use 60 seconds if not set
 
+            // Set UI values
             AutoSaveCheckBox.IsChecked = AutoSave;
             PingTimeoutTextBox.Text = PingTimeout.ToString();
             MaxConcurrentScansTextBox.Text = MaxConcurrentScans.ToString();
             ExecutionTimeLimitTextBox.Text = ExecutionTimeLimit.ToString();
+
+            // Add input validation
+            PingTimeoutTextBox.TextChanged += ValidateNumericInput;
+            MaxConcurrentScansTextBox.TextChanged += ValidateNumericInput;
+            ExecutionTimeLimitTextBox.TextChanged += ValidateNumericInput;
+        }
+
+        private void ValidateNumericInput(object sender, TextChangedEventArgs e)
+        {
+            if (sender is TextBox textBox)
+            {
+                // Reset border color
+                textBox.BorderBrush = new SolidColorBrush(Color.FromRgb(221, 221, 221)); // #DDD
+
+                if (int.TryParse(textBox.Text, out int value))
+                {
+                    bool isValid = true;
+
+                    // Validate based on which textbox
+                    if (textBox == PingTimeoutTextBox)
+                    {
+                        isValid = value >= 1000 && value <= 10000;
+                    }
+                    else if (textBox == MaxConcurrentScansTextBox)
+                    {
+                        isValid = value >= 1 && value <= 50;
+                    }
+                    else if (textBox == ExecutionTimeLimitTextBox)
+                    {
+                        isValid = value >= 10 && value <= 300;
+                    }
+
+                    if (!isValid)
+                    {
+                        textBox.BorderBrush = new SolidColorBrush(Color.FromRgb(220, 53, 69)); // Red border for invalid
+                    }
+                    else
+                    {
+                        textBox.BorderBrush = new SolidColorBrush(Color.FromRgb(40, 167, 69)); // Green border for valid
+                    }
+                }
+                else if (!string.IsNullOrEmpty(textBox.Text))
+                {
+                    textBox.BorderBrush = new SolidColorBrush(Color.FromRgb(220, 53, 69)); // Red border for invalid
+                }
+            }
         }
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -59,27 +111,50 @@ namespace IPProcessingTool
 
         private bool ValidateSettings()
         {
-            if (!int.TryParse(PingTimeoutTextBox.Text, out int pingTimeout) || pingTimeout <= 0)
+            var errors = new List<string>();
+
+            // Validate Ping Timeout
+            if (!int.TryParse(PingTimeoutTextBox.Text, out int pingTimeout) || pingTimeout < 1000 || pingTimeout > 10000)
             {
-                MessageBox.Show("Please enter a valid positive integer for Ping Timeout.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
+                errors.Add("• Ping Timeout must be between 1000 and 10000 milliseconds");
+                PingTimeoutTextBox.BorderBrush = new SolidColorBrush(Color.FromRgb(220, 53, 69));
+            }
+
+            // Validate Max Concurrent Scans
+            if (!int.TryParse(MaxConcurrentScansTextBox.Text, out int maxConcurrentScans) || maxConcurrentScans < 1 || maxConcurrentScans > 50)
+            {
+                errors.Add("• Max Concurrent Scans must be between 1 and 50");
+                MaxConcurrentScansTextBox.BorderBrush = new SolidColorBrush(Color.FromRgb(220, 53, 69));
+            }
+
+            // Validate Execution Time Limit
+            if (!int.TryParse(ExecutionTimeLimitTextBox.Text, out int executionTimeLimit) || executionTimeLimit < 10 || executionTimeLimit > 300)
+            {
+                errors.Add("• Execution Time Limit must be between 10 and 300 seconds");
+                ExecutionTimeLimitTextBox.BorderBrush = new SolidColorBrush(Color.FromRgb(220, 53, 69));
+            }
+
+            if (errors.Any())
+            {
+                string errorMessage = "Please correct the following issues:\n\n" + string.Join("\n", errors);
+
+                // Create a custom message box that matches our theme
+                var result = MessageBox.Show(errorMessage, "⚠️ Invalid Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
-            if (!int.TryParse(MaxConcurrentScansTextBox.Text, out int maxConcurrentScans) || maxConcurrentScans <= 0)
-            {
-                MessageBox.Show("Please enter a valid positive integer for Max Concurrent Scans.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return false;
-            }
-            if (!int.TryParse(ExecutionTimeLimitTextBox.Text, out int executionTimeLimit) || executionTimeLimit <= 0)
-            {
-                MessageBox.Show("Please enter a valid positive integer for Execution Time Limit per IP.", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return false;
-            }
+
             return true;
         }
 
         private bool HasDataRetrievalOptionsChanged()
         {
             return !DataColumns.SequenceEqual(originalDataColumns, new ColumnSettingComparer());
+        }
+
+        private void ShowSuccessMessage()
+        {
+            // This could be expanded to show a nice in-window success message
+            // For now, we'll rely on the dialog closing to indicate success
         }
     }
 
