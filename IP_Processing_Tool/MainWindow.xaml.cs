@@ -145,6 +145,20 @@ namespace IPProcessingTool
             }
         }
 
+        // update code (replace 4 button handlers with single modern scan handler)
+        private async void ScanButton_Click(object sender, RoutedEventArgs e)
+        {
+            var inputWindow = new ModernInputWindow();
+            if (inputWindow.ShowDialog() == true)
+            {
+                var targets = inputWindow.ProcessedTargets;
+                Logger.Log(LogLevel.INFO, "User started scan with modern input", context: "ScanButton_Click",
+                    additionalInfo: $"{targets.Count} targets");
+                await ProcessIPsAsync(targets);
+            }
+        }
+        // end of update
+
         private async Task ProcessIPsAsync(IEnumerable<string> ipsOrHostnames)
         {
             var resolvedIPs = new List<(string original, string resolved)>();
@@ -325,92 +339,6 @@ namespace IPProcessingTool
             }
 
             MessageBox.Show("Wake-on-LAN packets sent to selected IP addresses.", "Wake-on-LAN", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
-        private async void Button1_Click(object sender, RoutedEventArgs e)
-        {
-            var inputWindow = new InputWindow("Enter IP address or hostname:", false);
-            if (inputWindow.ShowDialog() == true)
-            {
-                string[] entries = inputWindow.InputText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
-                Logger.Log(LogLevel.INFO, "User input IP addresses/hostnames", context: "Button1_Click", additionalInfo: string.Join(", ", entries));
-                await ProcessIPsAsync(entries);
-            }
-        }
-
-        private async void Button2_Click(object sender, RoutedEventArgs e)
-        {
-            OpenFileDialog openFileDialog = new OpenFileDialog
-            {
-                Filter = "CSV Files (*.csv)|*.csv"
-            };
-            if (openFileDialog.ShowDialog() == true)
-            {
-                string csvPath = openFileDialog.FileName;
-
-                try
-                {
-                    Logger.Log(LogLevel.INFO, "User selected CSV file", context: "Button2_Click", additionalInfo: csvPath);
-
-                    var ips = File.ReadAllLines(csvPath).Select(line => line.Trim()).ToList();
-                    await ProcessIPsAsync(ips);
-                }
-                catch (IOException ex)
-                {
-                    if (ex.Message.Contains("being used by another process"))
-                    {
-                        MessageBox.Show("The file is currently being used by another process. Please close the file and try again.", "File Access Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                    else
-                    {
-                        MessageBox.Show($"An error occurred while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                }
-            }
-        }
-
-        private async void Button3_Click(object sender, RoutedEventArgs e)
-        {
-            var inputWindow = new InputWindow("Enter the IP segment:", true);
-            if (inputWindow.ShowDialog() == true)
-            {
-                string[] segments = inputWindow.InputText.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
-                Logger.Log(LogLevel.INFO, "User input IP segments", context: "Button3_Click", additionalInfo: string.Join(", ", segments));
-                var ips = segments.SelectMany(segment => Enumerable.Range(0, 256).Select(i => $"{segment}.{i}"));
-                await ProcessIPsAsync(ips);
-            }
-        }
-
-        private async void Button4_Click(object sender, RoutedEventArgs e)
-        {
-            OpenFileDialog openFileDialog = new OpenFileDialog
-            {
-                Filter = "CSV Files (*.csv)|*.csv"
-            };
-            if (openFileDialog.ShowDialog() == true)
-            {
-                string csvPath = openFileDialog.FileName;
-
-                try
-                {
-                    Logger.Log(LogLevel.INFO, "User selected CSV file for segment scan", context: "Button4_Click", additionalInfo: csvPath);
-
-                    var segments = File.ReadAllLines(csvPath).Select(line => line.Trim()).ToList();
-                    var ips = segments.SelectMany(segment => Enumerable.Range(0, 256).Select(i => $"{segment}.{i}"));
-                    await ProcessIPsAsync(ips);
-                }
-                catch (IOException ex)
-                {
-                    if (ex.Message.Contains("being used by another process"))
-                    {
-                        MessageBox.Show("The file is currently being used by another process. Please close the file and try again.", "File Access Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                    else
-                    {
-                        MessageBox.Show($"An error occurred while accessing the file: {ex.Message}", "File Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                }
-            }
         }
 
         private async Task<ScanStatus> ProcessIPAsync(string ip, CancellationToken cancellationToken)
@@ -1252,10 +1180,10 @@ namespace IPProcessingTool
         {
             Dispatcher.Invoke(() =>
             {
-                Button1.IsEnabled = false;
-                Button2.IsEnabled = false;
-                Button3.IsEnabled = false;
-                Button4.IsEnabled = false;
+                if (ScanButton != null)
+                {
+                    ScanButton.IsEnabled = false;
+                }
             });
         }
 
@@ -1263,10 +1191,10 @@ namespace IPProcessingTool
         {
             Dispatcher.Invoke(() =>
             {
-                Button1.IsEnabled = true;
-                Button2.IsEnabled = true;
-                Button3.IsEnabled = true;
-                Button4.IsEnabled = true;
+                if (ScanButton != null)
+                {
+                    ScanButton.IsEnabled = true;
+                }
             });
         }
 

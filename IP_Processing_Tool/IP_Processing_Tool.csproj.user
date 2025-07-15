@@ -9,7 +9,7 @@
     </ApplicationDefinition>
   </ItemGroup>
   <ItemGroup>
-    <Compile Update="InputWindow.xaml.cs">
+    <Compile Update="ModernInputWindow.xaml.cs">
       <SubType>Code</SubType>
     </Compile>
     <Compile Update="Settings.xaml.cs">
@@ -17,10 +17,10 @@
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <Page Update="InputWindow.xaml">
+    <Page Update="MainWindow.xaml">
       <SubType>Designer</SubType>
     </Page>
-    <Page Update="MainWindow.xaml">
+    <Page Update="ModernInputWindow.xaml">
       <SubType>Designer</SubType>
     </Page>
     <Page Update="Settings.xaml">
