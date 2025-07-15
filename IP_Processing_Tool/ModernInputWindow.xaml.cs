@@ -117,7 +117,26 @@ namespace IPProcessingTool
             }
         }
 
-        private void ProcessInput_Click(object sender, RoutedEventArgs e)
+        private void ClearPreview_Click(object sender, RoutedEventArgs e)
+        {
+            previewItems.Clear();
+            if (InputTextBox != null)
+            {
+                InputTextBox.Text = PLACEHOLDER_TEXT;
+                InputTextBox.Foreground = new SolidColorBrush(Color.FromRgb(153, 153, 153));
+            }
+            selectedFilePath = "";
+            if (SelectedFileLabel != null)
+            {
+                SelectedFileLabel.Text = "No file selected";
+                SelectedFileLabel.Foreground = new SolidColorBrush(Color.FromRgb(102, 102, 102));
+                SelectedFileLabel.FontStyle = FontStyles.Italic;
+            }
+            UpdateUI();
+            ShowStatus("ℹ️ Info", "All inputs cleared", "#2196F3");
+        }
+
+        private void StartScan_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -144,46 +163,26 @@ namespace IPProcessingTool
                 }
 
                 // Add to preview (background processing)
-                int previousCount = previewItems.Count;
                 foreach (var target in newTargets)
                 {
                     previewItems.Add(target);
                 }
 
-                UpdateUI();
-
-                int addedCount = previewItems.Count - previousCount;
-                if (addedCount > 0)
+                if (previewItems.Count > 0)
                 {
-                    ShowStatus("✅ Success", $"Added {addedCount} new targets. Total: {previewItems.Count} targets ready to scan", "#4CAF50");
-                }
-                else if (newTargets.Count > 0)
-                {
-                    ShowStatus("ℹ️ Info", "All targets were already in the list", "#2196F3");
+                    ProcessedTargets = previewItems.ToList();
+                    DialogResult = true;
+                    Close();
                 }
                 else
                 {
-                    ShowStatus("⚠️ Warning", "No valid targets found to add", "#FF9800");
+                    ShowStatus("⚠️ Warning", "No valid targets found. Please enter IP addresses, hostnames, ranges, or upload a file.", "#FF9800");
                 }
             }
             catch (Exception ex)
             {
                 ShowStatus("❌ Error", $"Error processing input: {ex.Message}", "#F44336");
             }
-        }
-
-        private void ClearPreview_Click(object sender, RoutedEventArgs e)
-        {
-            previewItems.Clear();
-            UpdateUI();
-            ShowStatus("ℹ️ Info", "All targets cleared", "#2196F3");
-        }
-
-        private void StartScan_Click(object sender, RoutedEventArgs e)
-        {
-            ProcessedTargets = previewItems.ToList();
-            DialogResult = true;
-            Close();
         }
 
         private void Cancel_Click(object sender, RoutedEventArgs e)
@@ -399,18 +398,14 @@ namespace IPProcessingTool
                     $"Estimated scan time: ~{CalculateEstimatedTime(previewItems.Count)}" : "";
             }
 
-            // Enable/disable start scan button with null check
-            if (StartScanButton != null)
-            {
-                StartScanButton.IsEnabled = previewItems.Count > 0;
-            }
-
-            // Update process button state with null check
+            // Check if we have valid input
             bool hasInput = (InputTextBox?.Text != PLACEHOLDER_TEXT && !string.IsNullOrWhiteSpace(InputTextBox?.Text))
                            || !string.IsNullOrEmpty(selectedFilePath);
-            if (ProcessInputButton != null)
+
+            // Enable start scan button if we have input
+            if (StartScanButton != null)
             {
-                ProcessInputButton.IsEnabled = hasInput;
+                StartScanButton.IsEnabled = hasInput;
             }
         }
 

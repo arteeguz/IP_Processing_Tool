@@ -17,7 +17,6 @@ using Microsoft.Win32;
 using System.Globalization;
 using System.Net.Sockets;
 
-
 namespace IPProcessingTool
 {
     public partial class MainWindow : Window
