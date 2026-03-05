@@ -1358,6 +1358,7 @@ namespace IPProcessingTool
             {
                 cancellationTokenSource.Cancel();
                 UpdateStatusBar("Scanning stopped by user.");
+                UpdateProgressBar(0);
                 EnableButtons();
             }
         }
