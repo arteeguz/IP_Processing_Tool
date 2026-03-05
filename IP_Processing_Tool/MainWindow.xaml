@@ -180,6 +180,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="52"/>   <!-- Header -->
             <RowDefinition Height="52"/>   <!-- Toolbar -->
+            <RowDefinition Height="44"/>   <!-- Search bar -->
             <RowDefinition Height="*"/>    <!-- DataGrid -->
             <RowDefinition Height="28"/>   <!-- Progress -->
             <RowDefinition Height="28"/>   <!-- Status bar -->
@@ -275,21 +276,103 @@
         </Border>
 
         <!-- ══════════════════════════════════════
-             DATAGRID
+             SEARCH BAR
         ══════════════════════════════════════ -->
         <Border Grid.Row="2"
-                Margin="12,10,12,0"
+                Background="#F8FAFC"
+                BorderBrush="#E2E8F0"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="12,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Search input -->
+                <Border Grid.Column="0"
+                        Background="White"
+                        BorderBrush="#CBD5E1"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Margin="0,7,10,7"
+                        Padding="10,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="🔍"
+                                   FontSize="13"
+                                   Foreground="#9CA3AF"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0"/>
+                        <TextBox Grid.Column="1"
+                                 x:Name="SearchBox"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 FontSize="13"
+                                 Foreground="#1E293B"
+                                 VerticalAlignment="Center"
+                                 TextChanged="SearchBox_TextChanged">
+                            <TextBox.Style>
+                                <Style TargetType="TextBox">
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="TextBox">
+                                                <Grid>
+                                                    <TextBlock Text="Filter results…"
+                                                               Foreground="#9CA3AF"
+                                                               FontSize="13"
+                                                               VerticalAlignment="Center"
+                                                               IsHitTestVisible="False">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Text, RelativeSource={RelativeSource AncestorType=TextBox}}" Value="">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </TextBox.Style>
+                        </TextBox>
+                    </Grid>
+                </Border>
+
+                <!-- Row count -->
+                <TextBlock Grid.Column="1"
+                           Name="ResultCountText"
+                           FontSize="12"
+                           Foreground="#64748B"
+                           VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- ══════════════════════════════════════
+             DATAGRID
+        ══════════════════════════════════════ -->
+        <Border Grid.Row="3"
+                Margin="12,8,12,0"
                 BorderBrush="#E2E8F0"
                 BorderThickness="1"
                 CornerRadius="8"
                 ClipToBounds="True">
-            <DataGrid Name="StatusDataGrid"/>
+            <DataGrid Name="StatusDataGrid" CanUserSortColumns="True"/>
         </Border>
 
         <!-- ══════════════════════════════════════
              PROGRESS ROW
         ══════════════════════════════════════ -->
-        <Grid Grid.Row="3" Margin="12,8,12,0">
+        <Grid Grid.Row="4" Margin="12,8,12,0">
             <ProgressBar Name="ProgressBar"/>
             <TextBlock Name="ProgressText"
                        HorizontalAlignment="Center"
@@ -302,7 +385,7 @@
         <!-- ══════════════════════════════════════
              STATUS BAR
         ══════════════════════════════════════ -->
-        <Border Grid.Row="4"
+        <Border Grid.Row="5"
                 Background="#F8FAFC"
                 BorderBrush="#E2E8F0"
                 BorderThickness="0,1,0,0">

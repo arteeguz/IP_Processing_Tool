@@ -17,6 +17,8 @@ using Microsoft.Win32;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.ComponentModel;
+using System.Windows.Data;
 
 namespace IPProcessingTool
 {
@@ -34,12 +36,16 @@ namespace IPProcessingTool
         private int processedIPs;
         private int MaxConcurrentScans = Environment.ProcessorCount; // Default to number of processor cores
         private int ExecutionTimeLimit = 60; // Default to 60 seconds
+        private ICollectionView _scanView;
+        private string _filterText = string.Empty;
 
         public MainWindow()
         {
             InitializeComponent();
             ScanStatuses = new ObservableCollection<ScanStatus>();
-            StatusDataGrid.ItemsSource = ScanStatuses;
+            _scanView = CollectionViewSource.GetDefaultView(ScanStatuses);
+            _scanView.Filter = FilterRow;
+            StatusDataGrid.ItemsSource = _scanView;
 
             parallelOptions = new ParallelOptions
             {
@@ -112,6 +118,7 @@ namespace IPProcessingTool
                 new ColumnSetting { Name = "NIC 0 LAN",                    PropertyName = nameof(ScanStatus.NIC0LAN),                 IsSelected = true  },
                 new ColumnSetting { Name = "NIC 1 WiFi",                   PropertyName = nameof(ScanStatus.NIC1WiFi),                IsSelected = true  },
                 new ColumnSetting { Name = "NIC 2 LAN 2",                  PropertyName = nameof(ScanStatus.NIC2LAN2),                IsSelected = true  },
+                new ColumnSetting { Name = "NIC 3",                        PropertyName = nameof(ScanStatus.NIC3),                   IsSelected = false },
                 new ColumnSetting { Name = "Date",                         PropertyName = nameof(ScanStatus.Date),                   IsSelected = true  },
                 new ColumnSetting { Name = "Time",                         PropertyName = nameof(ScanStatus.Time),                   IsSelected = true  },
                 new ColumnSetting { Name = "Ping Time",                    PropertyName = nameof(ScanStatus.PingTime),               IsSelected = true  },
@@ -134,15 +141,18 @@ namespace IPProcessingTool
             foreach (var column in dataColumnSettings.Where(c => c.IsSelected))
             {
                 var binding = column.Name == "Ping Time"
-                    ? new System.Windows.Data.Binding(column.PropertyName) { StringFormat = "{0} ms" }
-                    : new System.Windows.Data.Binding(column.PropertyName);
+                    ? new Binding(column.PropertyName) { StringFormat = "{0} ms" }
+                    : new Binding(column.PropertyName);
 
                 StatusDataGrid.Columns.Add(new DataGridTextColumn
                 {
                     Header = column.Name,
-                    Binding = binding
+                    Binding = binding,
+                    SortMemberPath = column.PropertyName   // enables column-header click sorting
                 });
             }
+            _scanView?.Refresh();
+            UpdateResultCount();
         }
 
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -477,7 +487,7 @@ namespace IPProcessingTool
                                 tasks.Add(GetBIOSInfoAsync(scope, scanStatus, cancellationToken));
                             }
 
-                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "NIC 0 LAN" || c.Name == "NIC 1 WiFi" || c.Name == "NIC 2 LAN 2" || c.Name == "MAC Address")))
+                            if (dataColumnSettings.Any(c => c.IsSelected && (c.Name == "NIC 0 LAN" || c.Name == "NIC 1 WiFi" || c.Name == "NIC 2 LAN 2" || c.Name == "NIC 3" || c.Name == "MAC Address")))
                             {
                                 tasks.Add(GetNetworkAdaptersInfoAsync(scope, scanStatus, cancellationToken));
                             }
@@ -927,77 +937,136 @@ namespace IPProcessingTool
         {
             try
             {
-                // Exclude Microsoft virtual/debug adapters (Hyper-V, Kernel Debug, Loopback)
-                // which report PhysicalAdapter=True on Windows 11 23H2
-                var query = new ObjectQuery(
-                    "SELECT * FROM Win32_NetworkAdapter WHERE PhysicalAdapter=True " +
-                    "AND Manufacturer != 'Microsoft'");
-                using var searcher = new ManagementObjectSearcher(scope, query);
-                var adapters = await Task.Run(() => searcher.Get(), cancellationToken);
+                // ── Step 1: build IP-address lookup from adapter configurations ───────────
+                // Query only IP-enabled configs to get IP addresses per adapter index.
+                var ipLookup = new Dictionary<uint, string>();
+                try
+                {
+                    var cfgQuery = new ObjectQuery(
+                        "SELECT Index, IPAddress FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled=True");
+                    using var cfgSearcher = new ManagementObjectSearcher(scope, cfgQuery);
+                    var configs = await Task.Run(() => cfgSearcher.Get().Cast<ManagementObject>().ToList(), cancellationToken);
+                    foreach (var cfg in configs)
+                    {
+                        uint idx = Convert.ToUInt32(cfg["Index"]);
+                        var ips = cfg["IPAddress"] as string[];
+                        // Take the first IPv4 address
+                        string ipv4 = ips?.FirstOrDefault(ip => !ip.Contains(':')) ?? "";
+                        if (!string.IsNullOrEmpty(ipv4))
+                            ipLookup[idx] = ipv4;
+                    }
+                }
+                catch { /* non-fatal: IP info is optional */ }
 
-                bool macAddressSet = false;
+                // ── Step 2: query physical non-Microsoft adapters ─────────────────────────
+                // AdapterTypeId: 0=Ethernet 802.3, 9=Wireless 802.11, 15=Wireless WAN
+                // We do NOT filter on NetEnabled — an adapter can be physically present but
+                // currently disconnected (e.g. docked LAN unplugged, WiFi off).
+                var adapterQuery = new ObjectQuery(
+                    "SELECT DeviceID, Index, Name, AdapterTypeId, MACAddress, NetEnabled, Speed " +
+                    "FROM Win32_NetworkAdapter " +
+                    "WHERE PhysicalAdapter=True AND Manufacturer != 'Microsoft'");
+                using var searcher = new ManagementObjectSearcher(scope, adapterQuery);
+                var adapters = await Task.Run(
+                    () => searcher.Get().Cast<ManagementObject>().ToList(), cancellationToken);
+
+                // ── Step 3: classify each adapter ────────────────────────────────────────
+                // Sort so Ethernet adapters come first (consistent NIC0/NIC2 assignment).
+                var classified = adapters
+                    .Select(a =>
+                    {
+                        uint typeId = a["AdapterTypeId"] != null ? Convert.ToUInt32(a["AdapterTypeId"]) : 99u;
+                        string name = a["Name"]?.ToString() ?? "Unknown";
+                        // WiFi: AdapterTypeId 9 or 15, OR name contains wireless keywords
+                        bool isWifi = typeId == 9 || typeId == 15
+                            || name.Contains("Wi-Fi",    StringComparison.OrdinalIgnoreCase)
+                            || name.Contains("WiFi",     StringComparison.OrdinalIgnoreCase)
+                            || name.Contains("Wireless", StringComparison.OrdinalIgnoreCase)
+                            || name.Contains("WLAN",     StringComparison.OrdinalIgnoreCase)
+                            || name.Contains("802.11",   StringComparison.OrdinalIgnoreCase);
+                        bool isEthernet = !isWifi && (typeId == 0
+                            || name.Contains("Ethernet", StringComparison.OrdinalIgnoreCase)
+                            || name.Contains("LAN",      StringComparison.OrdinalIgnoreCase));
+                        return (adapter: a, name, typeId, isWifi, isEthernet);
+                    })
+                    // Ethernet first, then WiFi, then others
+                    .OrderBy(x => x.isEthernet ? 0 : x.isWifi ? 1 : 2)
+                    .ToList();
+
+                // ── Step 4: fill NIC slots ────────────────────────────────────────────────
+                bool macSet  = false;
                 bool nic0Set = false;
                 bool nic1Set = false;
                 bool nic2Set = false;
+                bool nic3Set = false;
 
-                foreach (ManagementObject adapter in adapters)
+                foreach (var (adapter, name, typeId, isWifi, isEthernet) in classified)
                 {
-                    string adapterType = adapter["AdapterType"]?.ToString() ?? "";
-                    string name = adapter["Name"]?.ToString() ?? "Unknown";
-                    string macAddress = adapter["MACAddress"]?.ToString();
-                    bool netEnabled = Convert.ToBoolean(adapter["NetEnabled"]);
-                    string speed = adapter["Speed"] != null ? $"{Convert.ToInt64(adapter["Speed"]) / 1000000} Mbps" : "N/A";
+                    string mac      = adapter["MACAddress"]?.ToString() ?? "";
+                    bool connected  = adapter["NetEnabled"] != null && Convert.ToBoolean(adapter["NetEnabled"]);
+                    uint index      = adapter["Index"] != null ? Convert.ToUInt32(adapter["Index"]) : uint.MaxValue;
+                    string speedRaw = adapter["Speed"] != null
+                        ? $"{Convert.ToInt64(adapter["Speed"]) / 1_000_000} Mbps"
+                        : "—";
+                    string ip       = ipLookup.TryGetValue(index, out var foundIp) ? foundIp : "";
+                    string status   = connected ? "Connected" : "Disconnected";
+                    string detail   = string.IsNullOrEmpty(ip)
+                        ? $"{name} | MAC: {mac} | {speedRaw} | {status}"
+                        : $"{name} | MAC: {mac} | IP: {ip} | {speedRaw} | {status}";
 
-                    // Always set the MAC Address if it's not set yet, regardless of adapter type or NetEnabled status
-                    if (!macAddressSet && !string.IsNullOrEmpty(macAddress))
+                    // MAC: prefer Ethernet, fall back to any
+                    if (!macSet && !string.IsNullOrEmpty(mac))
                     {
-                        scanStatus.MACAddress = macAddress;
-                        macAddressSet = true;
-                    }
-
-                    // Only set NIC info if the adapter is enabled and we're scanning for it
-                    if (netEnabled)
-                    {
-                        if (adapterType.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
+                        if (isEthernet || !classified.Any(x => x.isEthernet && !string.IsNullOrEmpty(x.adapter["MACAddress"]?.ToString())))
                         {
-                            if (!nic0Set && dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 0 LAN"))
-                            {
-                                scanStatus.NIC0LAN = $"{name} | MAC: {macAddress} | Speed: {speed}";
-                                nic0Set = true;
-                            }
-                            else if (!nic2Set && dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 2 LAN 2"))
-                            {
-                                scanStatus.NIC2LAN2 = $"{name} | MAC: {macAddress} | Speed: {speed}";
-                                nic2Set = true;
-                            }
-                        }
-                        else if ((adapterType.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
-                                  name.Contains("WiFi", StringComparison.OrdinalIgnoreCase) ||
-                                  name.Contains("Wireless", StringComparison.OrdinalIgnoreCase)) &&
-                                 !nic1Set && dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 1 WiFi"))
-                        {
-                            scanStatus.NIC1WiFi = $"{name} | MAC: {macAddress} | Speed: {speed}";
-                            nic1Set = true;
+                            scanStatus.MACAddress = mac;
+                            macSet = true;
                         }
                     }
 
-                    // Break if we've set everything we need
-                    if (macAddressSet && nic0Set && nic1Set && nic2Set) break;
+                    if (isEthernet)
+                    {
+                        if (!nic0Set) { scanStatus.NIC0LAN  = detail; nic0Set = true; }
+                        else if (!nic2Set) { scanStatus.NIC2LAN2 = detail; nic2Set = true; }
+                        else if (!nic3Set) { scanStatus.NIC3     = detail; nic3Set = true; }
+                    }
+                    else if (isWifi)
+                    {
+                        if (!nic1Set) { scanStatus.NIC1WiFi = detail; nic1Set = true; }
+                        else if (!nic3Set) { scanStatus.NIC3    = detail; nic3Set = true; }
+                    }
+                    else
+                    {
+                        // Other physical adapter (e.g. Bluetooth PAN, LTE)
+                        if (!nic3Set) { scanStatus.NIC3 = detail; nic3Set = true; }
+                    }
+
+                    if (macSet && nic0Set && nic1Set && nic2Set && nic3Set) break;
                 }
 
-                // Set default values for unset properties
-                if (!macAddressSet) scanStatus.MACAddress = "Not Available";
-                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 0 LAN") && !nic0Set) scanStatus.NIC0LAN = "Not Present";
-                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 1 WiFi") && !nic1Set) scanStatus.NIC1WiFi = "Not Present";
-                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 2 LAN 2") && !nic2Set) scanStatus.NIC2LAN2 = "Not Present";
+                // Ensure MAC is set if we skipped the Ethernet-preference logic
+                if (!macSet)
+                {
+                    var anyMac = classified.FirstOrDefault(x => !string.IsNullOrEmpty(x.adapter["MACAddress"]?.ToString()));
+                    scanStatus.MACAddress = anyMac.adapter != null
+                        ? anyMac.adapter["MACAddress"]?.ToString() ?? "Not Available"
+                        : "Not Available";
+                }
+
+                // ── Step 5: defaults for columns that got no adapter ─────────────────────
+                if (!nic0Set) scanStatus.NIC0LAN  = "Not Present";
+                if (!nic1Set) scanStatus.NIC1WiFi  = "Not Present";
+                if (!nic2Set) scanStatus.NIC2LAN2  = "Not Present";
+                if (!nic3Set) scanStatus.NIC3      = "Not Present";
             }
             catch (Exception ex)
             {
                 Logger.Log(LogLevel.ERROR, $"Error getting network adapters info: {ex.Message}", context: "GetNetworkAdaptersInfoAsync");
                 scanStatus.MACAddress = "Error";
-                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 0 LAN")) scanStatus.NIC0LAN = "Error retrieving data";
-                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 1 WiFi")) scanStatus.NIC1WiFi = "Error retrieving data";
-                if (dataColumnSettings.Any(c => c.IsSelected && c.Name == "NIC 2 LAN 2")) scanStatus.NIC2LAN2 = "Error retrieving data";
+                scanStatus.NIC0LAN    = "Error";
+                scanStatus.NIC1WiFi   = "Error";
+                scanStatus.NIC2LAN2   = "Error";
+                scanStatus.NIC3       = "Error";
             }
         }
 
@@ -1162,7 +1231,7 @@ namespace IPProcessingTool
                 {
                     ScanStatuses.Add(scanStatus);
                 }
-                // ObservableCollection notifies the grid automatically — no Items.Refresh() needed.
+                UpdateResultCount();
             });
         }
 
@@ -1173,6 +1242,50 @@ namespace IPProcessingTool
             UpdateStatusBar("Grid cleared.");
         }
 
+
+        // ── Search / Filter ─────────────────────────────────────────
+        public void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (sender is TextBox tb)
+            {
+                _filterText = tb.Text.Trim();
+                _scanView.Refresh();
+                UpdateResultCount();
+            }
+        }
+
+        private bool FilterRow(object item)
+        {
+            if (string.IsNullOrEmpty(_filterText)) return true;
+            if (item is not ScanStatus s) return false;
+
+            // Search across all string properties that have visible columns
+            var visibleProps = dataColumnSettings
+                .Where(c => c.IsSelected)
+                .Select(c => c.PropertyName)
+                .ToHashSet();
+
+            return typeof(ScanStatus)
+                .GetProperties()
+                .Where(p => visibleProps.Contains(p.Name))
+                .Select(p => p.GetValue(s)?.ToString() ?? "")
+                .Any(v => v.Contains(_filterText, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void UpdateResultCount()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (ResultCountText != null)
+                {
+                    int shown = _scanView.Cast<object>().Count();
+                    int total = ScanStatuses.Count;
+                    ResultCountText.Text = shown == total
+                        ? $"{total} rows"
+                        : $"{shown} of {total} rows";
+                }
+            });
+        }
 
         private void UpdateStatusBar(string message)
         {
@@ -1367,6 +1480,7 @@ namespace IPProcessingTool
             public string NIC0LAN { get; set; }
             public string NIC1WiFi { get; set; }
             public string NIC2LAN2 { get; set; }
+            public string NIC3 { get; set; }
             public string Port16992 { get; set; }
             public string Port16993 { get; set; }
             public string Port22 { get; set; }
@@ -1400,6 +1514,7 @@ namespace IPProcessingTool
                 NIC0LAN = "N/A";
                 NIC1WiFi = "N/A";
                 NIC2LAN2 = "N/A";
+                NIC3 = "N/A";
                 Port16992 = "N/A";
                 Port16993 = "N/A";
                 Port22 = "N/A";
