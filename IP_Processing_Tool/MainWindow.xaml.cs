@@ -345,7 +345,11 @@ namespace IPProcessingTool
 
         private async void WakeOnLANButton_Click(object sender, RoutedEventArgs e)
         {
-            var selectedItems = StatusDataGrid.SelectedItems.Cast<ScanStatus>().ToList();
+            var selectedItems = StatusDataGrid.SelectedCells
+                .Select(c => c.Item)
+                .OfType<ScanStatus>()
+                .Distinct()
+                .ToList();
             if (selectedItems.Count == 0)
             {
                 MessageBox.Show("Please select at least one IP address to wake.", "No Selection", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1238,6 +1242,7 @@ namespace IPProcessingTool
         private void ClearButton_Click(object sender, RoutedEventArgs e)
         {
             ScanStatuses.Clear();
+            ClearButton.Visibility = Visibility.Collapsed;
             Logger.Log(LogLevel.INFO, "Grid data cleared by the user.");
             UpdateStatusBar("Grid cleared.");
         }
@@ -1326,10 +1331,8 @@ namespace IPProcessingTool
         {
             Dispatcher.Invoke(() =>
             {
-                if (ScanButton != null)
-                {
-                    ScanButton.IsEnabled = false;
-                }
+                if (ScanButton != null) ScanButton.IsEnabled = false;
+                if (StopButton != null) StopButton.Visibility = Visibility.Visible;
             });
         }
 
@@ -1337,10 +1340,10 @@ namespace IPProcessingTool
         {
             Dispatcher.Invoke(() =>
             {
-                if (ScanButton != null)
-                {
-                    ScanButton.IsEnabled = true;
-                }
+                if (ScanButton != null) ScanButton.IsEnabled = true;
+                if (StopButton != null) StopButton.Visibility = Visibility.Collapsed;
+                if (ClearButton != null && ScanStatuses.Count > 0)
+                    ClearButton.Visibility = Visibility.Visible;
             });
         }
 

@@ -105,8 +105,9 @@
             <Setter Property="FontSize"                 Value="12.5"/>
             <Setter Property="Foreground"               Value="#1E293B"/>
             <Setter Property="ColumnHeaderHeight"       Value="34"/>
+            <!-- Cell selection: click a cell to select it, drag to multi-select -->
             <Setter Property="SelectionMode"            Value="Extended"/>
-            <Setter Property="SelectionUnit"            Value="FullRow"/>
+            <Setter Property="SelectionUnit"            Value="Cell"/>
             <Setter Property="CanUserResizeColumns"     Value="True"/>
             <Setter Property="IsReadOnly"               Value="True"/>
             <Setter Property="AutoGenerateColumns"      Value="False"/>
@@ -123,29 +124,39 @@
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
 
+        <!-- Row: only hover highlight; no full-row selection colour (cells own that now) -->
         <Style TargetType="DataGridRow">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#EFF6FF"/>
                 </Trigger>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#DBEAFE"/>
-                    <Setter Property="Foreground" Value="#1E3A5F"/>
-                </Trigger>
             </Style.Triggers>
         </Style>
 
+        <!-- Cell: selected cell gets a solid blue highlight -->
         <Style TargetType="DataGridCell">
             <Setter Property="Padding"         Value="10,0"/>
             <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="DataGridCell">
-                        <Border Padding="{TemplateBinding Padding}"
-                                Background="{TemplateBinding Background}">
+                        <Border x:Name="CellBd"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent"
+                                BorderThickness="0">
                             <ContentPresenter VerticalAlignment="Center"/>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="CellBd" Property="Background"   Value="#BFDBFE"/>
+                                <Setter TargetName="CellBd" Property="BorderBrush"  Value="#93C5FD"/>
+                                <Setter TargetName="CellBd" Property="BorderThickness" Value="1"/>
+                                <Setter Property="Foreground" Value="#1E3A5F"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -265,12 +276,14 @@
                     <Button Name="StopButton"
                             Content="■  Stop"
                             Click="StopButton_Click"
-                            Style="{StaticResource BtnDanger}"/>
+                            Style="{StaticResource BtnDanger}"
+                            Visibility="Collapsed"/>
 
                     <Button Name="ClearButton"
                             Content="🗑  Clear"
                             Click="ClearButton_Click"
-                            Style="{StaticResource BtnOutline}"/>
+                            Style="{StaticResource BtnOutline}"
+                            Visibility="Collapsed"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -373,13 +386,18 @@
              PROGRESS ROW
         ══════════════════════════════════════ -->
         <Grid Grid.Row="4" Margin="12,8,12,0">
-            <ProgressBar Name="ProgressBar"/>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <ProgressBar Name="ProgressBar" Grid.Column="0"/>
             <TextBlock Name="ProgressText"
-                       HorizontalAlignment="Center"
+                       Grid.Column="1"
                        VerticalAlignment="Center"
                        FontSize="10"
                        FontWeight="SemiBold"
-                       Foreground="#374151"/>
+                       Foreground="#374151"
+                       Margin="8,0,0,0"/>
         </Grid>
 
         <!-- ══════════════════════════════════════
