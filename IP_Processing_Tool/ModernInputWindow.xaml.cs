@@ -13,7 +13,6 @@ namespace IPProcessingTool
 {
     public partial class ModernInputWindow : Window
     {
-        private const string PLACEHOLDER_TEXT = "Enter one or more targets (one per line):\n• IP addresses: 192.168.1.1\n• Hostnames: google.com, server01.company.com\n• IP ranges: 192.168.1.1-192.168.1.100\n• CIDR notation: 192.168.1.0/24\n• Segments: 192.168.1 (expands to .0-.255)";
 
         public List<string> ProcessedTargets { get; private set; }
         private string selectedFilePath;
@@ -26,27 +25,6 @@ namespace IPProcessingTool
 
             // Delay UpdateUI call until after XAML is loaded
             Loaded += (s, e) => UpdateUI();
-        }
-
-        private void InputTextBox_GotFocus(object sender, RoutedEventArgs e)
-        {
-            if (InputTextBox?.Text == PLACEHOLDER_TEXT)
-            {
-                InputTextBox.Text = "";
-                InputTextBox.Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51));
-            }
-        }
-
-        private void InputTextBox_LostFocus(object sender, RoutedEventArgs e)
-        {
-            if (string.IsNullOrWhiteSpace(InputTextBox?.Text))
-            {
-                if (InputTextBox != null)
-                {
-                    InputTextBox.Text = PLACEHOLDER_TEXT;
-                    InputTextBox.Foreground = new SolidColorBrush(Color.FromRgb(153, 153, 153));
-                }
-            }
         }
 
         private void InputTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -63,15 +41,9 @@ namespace IPProcessingTool
                     string clipboardText = Clipboard.GetText();
                     if (!string.IsNullOrWhiteSpace(clipboardText) && InputTextBox != null)
                     {
-                        if (InputTextBox.Text == PLACEHOLDER_TEXT)
-                        {
-                            InputTextBox.Text = clipboardText;
-                            InputTextBox.Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51));
-                        }
-                        else
-                        {
-                            InputTextBox.Text += Environment.NewLine + clipboardText;
-                        }
+                        InputTextBox.Text = string.IsNullOrWhiteSpace(InputTextBox.Text)
+                            ? clipboardText
+                            : InputTextBox.Text + Environment.NewLine + clipboardText;
                         ShowStatus("✅ Success", "Content pasted from clipboard", "#4CAF50");
                     }
                 }
@@ -88,11 +60,7 @@ namespace IPProcessingTool
 
         private void ClearInput_Click(object sender, RoutedEventArgs e)
         {
-            if (InputTextBox != null)
-            {
-                InputTextBox.Text = PLACEHOLDER_TEXT;
-                InputTextBox.Foreground = new SolidColorBrush(Color.FromRgb(153, 153, 153));
-            }
+            if (InputTextBox != null) InputTextBox.Text = "";
             UpdateUI();
         }
 
@@ -120,11 +88,7 @@ namespace IPProcessingTool
         private void ClearPreview_Click(object sender, RoutedEventArgs e)
         {
             previewItems.Clear();
-            if (InputTextBox != null)
-            {
-                InputTextBox.Text = PLACEHOLDER_TEXT;
-                InputTextBox.Foreground = new SolidColorBrush(Color.FromRgb(153, 153, 153));
-            }
+            if (InputTextBox != null) InputTextBox.Text = "";
             selectedFilePath = "";
             if (SelectedFileLabel != null)
             {
@@ -143,7 +107,7 @@ namespace IPProcessingTool
                 var newTargets = new HashSet<string>();
 
                 // Process manual input
-                if (InputTextBox?.Text != PLACEHOLDER_TEXT && !string.IsNullOrWhiteSpace(InputTextBox?.Text))
+                if (!string.IsNullOrWhiteSpace(InputTextBox?.Text))
                 {
                     var manualTargets = ParseInput(InputTextBox.Text);
                     foreach (var target in manualTargets)
@@ -399,7 +363,7 @@ namespace IPProcessingTool
             }
 
             // Check if we have valid input
-            bool hasInput = (InputTextBox?.Text != PLACEHOLDER_TEXT && !string.IsNullOrWhiteSpace(InputTextBox?.Text))
+            bool hasInput = !string.IsNullOrWhiteSpace(InputTextBox?.Text)
                            || !string.IsNullOrEmpty(selectedFilePath);
 
             // Enable start scan button if we have input
