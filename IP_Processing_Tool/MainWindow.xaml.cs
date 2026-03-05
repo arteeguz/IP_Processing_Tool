@@ -16,6 +16,7 @@ using System.Windows.Controls;
 using Microsoft.Win32;
 using System.Globalization;
 using System.Net.Sockets;
+using System.Text.Json;
 
 namespace IPProcessingTool
 {
@@ -33,8 +34,6 @@ namespace IPProcessingTool
         private int processedIPs;
         private int MaxConcurrentScans = Environment.ProcessorCount; // Default to number of processor cores
         private int ExecutionTimeLimit = 60; // Default to 60 seconds
-        private const int BATCH_SIZE = 50;
-        private List<ScanStatus> _batch = new List<ScanStatus>();
 
         public MainWindow()
         {
@@ -47,51 +46,85 @@ namespace IPProcessingTool
                 MaxDegreeOfParallelism = Environment.ProcessorCount
             };
 
-            dataColumnSettings = new ObservableCollection<ColumnSetting>();
-            autoSave = false; // Default value
-
             InitializeFloorMappings();
             InitializeColumnSettings();
+            LoadPersistedSettings();
             UpdateDataGridColumns();
 
             Logger.Log(LogLevel.INFO, "Application started");
         }
 
-        // previous code
+        private void LoadPersistedSettings()
+        {
+            var saved = AppSettings.Load();
+            if (saved.PingTimeout > 0) pingTimeout = saved.PingTimeout;
+            if (saved.MaxConcurrentScans > 0) MaxConcurrentScans = saved.MaxConcurrentScans;
+            if (saved.ExecutionTimeLimit > 0) ExecutionTimeLimit = saved.ExecutionTimeLimit;
+            autoSave = saved.AutoSave;
+
+            // Restore column visibility if saved, otherwise keep defaults
+            if (saved.Columns != null && saved.Columns.Count > 0)
+            {
+                foreach (var savedCol in saved.Columns)
+                {
+                    var match = dataColumnSettings.FirstOrDefault(c => c.PropertyName == savedCol.PropertyName);
+                    if (match != null) match.IsSelected = savedCol.IsSelected;
+                }
+            }
+        }
+
+        private void SavePersistedSettings()
+        {
+            var settings = new AppSettings
+            {
+                PingTimeout = pingTimeout,
+                MaxConcurrentScans = MaxConcurrentScans,
+                ExecutionTimeLimit = ExecutionTimeLimit,
+                AutoSave = autoSave,
+                Columns = dataColumnSettings.Select(c => new ColumnSettingData
+                {
+                    Name = c.Name,
+                    PropertyName = c.PropertyName,
+                    IsSelected = c.IsSelected
+                }).ToList()
+            };
+            settings.Save();
+        }
+
         private void InitializeColumnSettings()
         {
             dataColumnSettings = new ObservableCollection<ColumnSetting>
             {
-                new ColumnSetting { Name = "IP Address", IsSelected = true },
-                new ColumnSetting { Name = "Hostname", IsSelected = true },
-                new ColumnSetting { Name = "Last Logged User", IsSelected = true },
-                new ColumnSetting { Name = "Machine Model", IsSelected = true },
-                new ColumnSetting { Name = "Disk Size", IsSelected = true },
-                new ColumnSetting { Name = "Disk Free Space", IsSelected = true },
-                new ColumnSetting { Name = "Other Drives", IsSelected = true },
-                new ColumnSetting { Name = "RAM Size", IsSelected = true },
-                new ColumnSetting { Name = "Windows Info", IsSelected = true },
-                new ColumnSetting { Name = "Microsoft Office Version", IsSelected = true },
-                new ColumnSetting { Name = "BIOS Version Date", IsSelected = true },
-                new ColumnSetting { Name = "SMBIOS Version", IsSelected = true },
-                new ColumnSetting { Name = "Embedded Controller Version", IsSelected = true },
-                new ColumnSetting { Name = "MAC Address", IsSelected = true },
-                new ColumnSetting { Name = "NIC 0 LAN", IsSelected = true },
-                new ColumnSetting { Name = "NIC 1 WiFi", IsSelected = true },
-                new ColumnSetting { Name = "NIC 2 LAN 2", IsSelected = true },
-                new ColumnSetting { Name = "Date", IsSelected = true },
-                new ColumnSetting { Name = "Time", IsSelected = true },
-                new ColumnSetting { Name = "Ping Time", IsSelected = true },
-                new ColumnSetting { Name = "Status", IsSelected = true },
-                new ColumnSetting { Name = "Details", IsSelected = true },
-                new ColumnSetting { Name = "Port 16992", IsSelected = true },
-                new ColumnSetting { Name = "Port 16993", IsSelected = true },
-                new ColumnSetting { Name = "Port 22", IsSelected = false },
-                new ColumnSetting { Name = "Port 80", IsSelected = false },
-                new ColumnSetting { Name = "Port 443", IsSelected = false },
-                new ColumnSetting { Name = "Port 3389", IsSelected = false },
-                new ColumnSetting { Name = "Port 5985", IsSelected = false },
-                new ColumnSetting { Name = "Floor", IsSelected = true },
+                new ColumnSetting { Name = "IP Address",                   PropertyName = nameof(ScanStatus.IPAddress),               IsSelected = true  },
+                new ColumnSetting { Name = "Hostname",                     PropertyName = nameof(ScanStatus.Hostname),                IsSelected = true  },
+                new ColumnSetting { Name = "Last Logged User",             PropertyName = nameof(ScanStatus.LastLoggedUser),          IsSelected = true  },
+                new ColumnSetting { Name = "Machine Model",                PropertyName = nameof(ScanStatus.MachineModel),            IsSelected = true  },
+                new ColumnSetting { Name = "Disk Size",                    PropertyName = nameof(ScanStatus.DiskSize),                IsSelected = true  },
+                new ColumnSetting { Name = "Disk Free Space",              PropertyName = nameof(ScanStatus.DiskFreeSpace),           IsSelected = true  },
+                new ColumnSetting { Name = "Other Drives",                 PropertyName = nameof(ScanStatus.OtherDrives),             IsSelected = true  },
+                new ColumnSetting { Name = "RAM Size",                     PropertyName = nameof(ScanStatus.RAMSize),                 IsSelected = true  },
+                new ColumnSetting { Name = "Windows Info",                 PropertyName = nameof(ScanStatus.WindowsInfo),             IsSelected = true  },
+                new ColumnSetting { Name = "Microsoft Office Version",     PropertyName = nameof(ScanStatus.MicrosoftOfficeVersion),  IsSelected = true  },
+                new ColumnSetting { Name = "BIOS Version Date",            PropertyName = nameof(ScanStatus.BIOSVersionDate),         IsSelected = true  },
+                new ColumnSetting { Name = "SMBIOS Version",               PropertyName = nameof(ScanStatus.SMBIOSVersion),           IsSelected = true  },
+                new ColumnSetting { Name = "Embedded Controller Version",  PropertyName = nameof(ScanStatus.EmbeddedControllerVersion), IsSelected = true },
+                new ColumnSetting { Name = "MAC Address",                  PropertyName = nameof(ScanStatus.MACAddress),              IsSelected = true  },
+                new ColumnSetting { Name = "NIC 0 LAN",                    PropertyName = nameof(ScanStatus.NIC0LAN),                 IsSelected = true  },
+                new ColumnSetting { Name = "NIC 1 WiFi",                   PropertyName = nameof(ScanStatus.NIC1WiFi),                IsSelected = true  },
+                new ColumnSetting { Name = "NIC 2 LAN 2",                  PropertyName = nameof(ScanStatus.NIC2LAN2),                IsSelected = true  },
+                new ColumnSetting { Name = "Date",                         PropertyName = nameof(ScanStatus.Date),                   IsSelected = true  },
+                new ColumnSetting { Name = "Time",                         PropertyName = nameof(ScanStatus.Time),                   IsSelected = true  },
+                new ColumnSetting { Name = "Ping Time",                    PropertyName = nameof(ScanStatus.PingTime),               IsSelected = true  },
+                new ColumnSetting { Name = "Status",                       PropertyName = nameof(ScanStatus.Status),                 IsSelected = true  },
+                new ColumnSetting { Name = "Details",                      PropertyName = nameof(ScanStatus.Details),                IsSelected = true  },
+                new ColumnSetting { Name = "Port 16992",                   PropertyName = nameof(ScanStatus.Port16992),              IsSelected = true  },
+                new ColumnSetting { Name = "Port 16993",                   PropertyName = nameof(ScanStatus.Port16993),              IsSelected = true  },
+                new ColumnSetting { Name = "Port 22",                      PropertyName = nameof(ScanStatus.Port22),                 IsSelected = false },
+                new ColumnSetting { Name = "Port 80",                      PropertyName = nameof(ScanStatus.Port80),                 IsSelected = false },
+                new ColumnSetting { Name = "Port 443",                     PropertyName = nameof(ScanStatus.Port443),                IsSelected = false },
+                new ColumnSetting { Name = "Port 3389",                    PropertyName = nameof(ScanStatus.Port3389),               IsSelected = false },
+                new ColumnSetting { Name = "Port 5985",                    PropertyName = nameof(ScanStatus.Port5985),               IsSelected = false },
+                new ColumnSetting { Name = "Floor",                        PropertyName = nameof(ScanStatus.Floor),                  IsSelected = true  },
             };
         }
 
@@ -100,22 +133,15 @@ namespace IPProcessingTool
             StatusDataGrid.Columns.Clear();
             foreach (var column in dataColumnSettings.Where(c => c.IsSelected))
             {
-                if (column.Name == "Ping Time")
+                var binding = column.Name == "Ping Time"
+                    ? new System.Windows.Data.Binding(column.PropertyName) { StringFormat = "{0} ms" }
+                    : new System.Windows.Data.Binding(column.PropertyName);
+
+                StatusDataGrid.Columns.Add(new DataGridTextColumn
                 {
-                    StatusDataGrid.Columns.Add(new DataGridTextColumn
-                    {
-                        Header = column.Name,
-                        Binding = new System.Windows.Data.Binding("PingTime") { StringFormat = "{0} ms" }
-                    });
-                }
-                else
-                {
-                    StatusDataGrid.Columns.Add(new DataGridTextColumn
-                    {
-                        Header = column.Name,
-                        Binding = new System.Windows.Data.Binding(column.Name.Replace(" ", ""))
-                    });
-                }
+                    Header = column.Name,
+                    Binding = binding
+                });
             }
         }
 
@@ -130,6 +156,7 @@ namespace IPProcessingTool
                 MaxConcurrentScans = settingsWindow.MaxConcurrentScans;
                 ExecutionTimeLimit = settingsWindow.ExecutionTimeLimit;
 
+                SavePersistedSettings();
                 UpdateDataGridColumns();
 
                 if (settingsWindow.DataRetrievalOptionsChanged && ScanStatuses.Count > 0)
@@ -162,18 +189,22 @@ namespace IPProcessingTool
         {
             var resolvedIPs = new List<(string original, string resolved)>();
 
-            // First, resolve all hostnames to IPs
+            // Resolve all hostnames to IPs in parallel — avoids sequential DNS delay
             UpdateStatusBar("Resolving hostnames...");
-            foreach (var entry in ipsOrHostnames)
+            var entries = ipsOrHostnames.ToList();
+            var resolutionTasks = entries.Select(e => ResolveHostnameToIPAsync(e)).ToList();
+            var resolutionResults = await Task.WhenAll(resolutionTasks);
+
+            for (int i = 0; i < entries.Count; i++)
             {
-                var resolvedIP = await ResolveHostnameToIPAsync(entry);
+                var entry = entries[i];
+                var resolvedIP = resolutionResults[i];
                 if (!string.IsNullOrEmpty(resolvedIP))
                 {
                     resolvedIPs.Add((entry, resolvedIP));
                 }
                 else
                 {
-                    // Add failed resolution to the grid immediately
                     var failedStatus = new ScanStatus
                     {
                         IPAddress = entry,
@@ -189,7 +220,7 @@ namespace IPProcessingTool
 
             totalIPs = resolvedIPs.Count;
             processedIPs = 0;
-            UpdateProgressBar(0);
+            UpdateProgressBar(0, 0, totalIPs);
 
             DisableButtons();
 
@@ -216,8 +247,8 @@ namespace IPProcessingTool
                                 }
                                 UpdateScanStatus(scanStatus);
                             }
-                            Interlocked.Increment(ref processedIPs);
-                            UpdateProgressBar((int)((double)processedIPs / totalIPs * 100));
+                            int done = Interlocked.Increment(ref processedIPs);
+                            UpdateProgressBar((int)((double)done / totalIPs * 100), done, totalIPs);
                         }
                         finally
                         {
@@ -240,14 +271,8 @@ namespace IPProcessingTool
             finally
             {
                 EnableButtons();
-                UpdateStatusBar("Completed processing all IPs.");
-                UpdateProgressBar(100);
-
-                Dispatcher.Invoke(() =>
-                {
-                    StatusDataGrid.Items.Refresh();
-                });
-
+                UpdateScanSummary();
+                UpdateProgressBar(100, totalIPs, totalIPs);
                 HandleAutoSave();
             }
         }
@@ -522,14 +547,22 @@ namespace IPProcessingTool
 
         private async Task GetMachineModelAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
+            // Win32_ComputerSystemProduct.Version is often blank or "None" on modern hardware.
+            // Win32_ComputerSystem.Manufacturer + Model reliably returns e.g. "HP EliteBook 840 G9".
             try
             {
-                var modelQuery = new ObjectQuery("SELECT Version FROM Win32_ComputerSystemProduct");
+                var modelQuery = new ObjectQuery("SELECT Manufacturer, Model FROM Win32_ComputerSystem");
                 using var modelSearcher = new ManagementObjectSearcher(scope, modelQuery);
                 var model = await Task.Run(() => modelSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
                 if (model != null)
                 {
-                    scanStatus.MachineModel = model["Version"]?.ToString() ?? "N/A";
+                    string manufacturer = model["Manufacturer"]?.ToString()?.Trim() ?? "";
+                    string modelName = model["Model"]?.ToString()?.Trim() ?? "";
+                    scanStatus.MachineModel = string.IsNullOrEmpty(manufacturer)
+                        ? modelName
+                        : $"{manufacturer} {modelName}".Trim();
+                    if (string.IsNullOrEmpty(scanStatus.MachineModel))
+                        scanStatus.MachineModel = "N/A";
                 }
             }
             catch (Exception ex)
@@ -562,64 +595,51 @@ namespace IPProcessingTool
         {
             try
             {
-                // Query for BIOS information
-                var biosQuery = new ObjectQuery("SELECT Manufacturer, SMBIOSBIOSVersion, ReleaseDate FROM Win32_BIOS");
+                // Single query fetches all BIOS fields — avoids 3 separate WMI round trips
+                var biosQuery = new ObjectQuery(
+                    "SELECT Manufacturer, SMBIOSBIOSVersion, ReleaseDate, " +
+                    "SMBIOSMajorVersion, SMBIOSMinorVersion, " +
+                    "EmbeddedControllerMajorVersion, EmbeddedControllerMinorVersion " +
+                    "FROM Win32_BIOS");
                 using var biosSearcher = new ManagementObjectSearcher(scope, biosQuery);
                 var bios = await Task.Run(() => biosSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
 
                 if (bios != null)
                 {
+                    // BIOS version + date
                     string manufacturer = bios["Manufacturer"]?.ToString() ?? "Unknown";
                     string smbiosBiosVersion = bios["SMBIOSBIOSVersion"]?.ToString() ?? "Unknown";
                     string releaseDate = bios["ReleaseDate"]?.ToString() ?? "Unknown";
-
-                    // Attempt to parse the release date
-                    if (releaseDate != "Unknown" && DateTime.TryParseExact(releaseDate.Split('.')[0], "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
+                    if (releaseDate != "Unknown" && DateTime.TryParseExact(
+                            releaseDate.Split('.')[0], "yyyyMMddHHmmss",
+                            CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsedDate))
                     {
                         releaseDate = parsedDate.ToString("M/d/yyyy");
                     }
-
                     scanStatus.BIOSVersionDate = $"{manufacturer}, {smbiosBiosVersion}, {releaseDate}";
+
+                    // SMBIOS version
+                    int smbiosMajor = Convert.ToInt32(bios["SMBIOSMajorVersion"]);
+                    int smbiosMinor = Convert.ToInt32(bios["SMBIOSMinorVersion"]);
+                    scanStatus.SMBIOSVersion = $"{smbiosMajor}.{smbiosMinor}";
+
+                    // Embedded Controller version — 255.255 means virtual machine / not present
+                    int ecMajor = Convert.ToInt32(bios["EmbeddedControllerMajorVersion"]);
+                    int ecMinor = Convert.ToInt32(bios["EmbeddedControllerMinorVersion"]);
+                    scanStatus.EmbeddedControllerVersion = (ecMajor == 255 && ecMinor == 255)
+                        ? "N/A (Virtual)"
+                        : $"{ecMajor}.{ecMinor}";
                 }
                 else
                 {
                     scanStatus.BIOSVersionDate = "BIOS information not available";
-                }
-
-                // Query for SMBIOS Version
-                var smbiosQuery = new ObjectQuery("SELECT SMBIOSMajorVersion, SMBIOSMinorVersion FROM Win32_BIOS");
-                using var smbiosSearcher = new ManagementObjectSearcher(scope, smbiosQuery);
-                var smbios = await Task.Run(() => smbiosSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-
-                if (smbios != null)
-                {
-                    int smbiosMajorVersion = Convert.ToInt32(smbios["SMBIOSMajorVersion"]);
-                    int smbiosMinorVersion = Convert.ToInt32(smbios["SMBIOSMinorVersion"]);
-                    scanStatus.SMBIOSVersion = $"{smbiosMajorVersion}.{smbiosMinorVersion}";
-                }
-                else
-                {
-                    scanStatus.SMBIOSVersion = "SMBIOS information not available";
-                }
-
-                // Query for Embedded Controller Version
-                var ecQuery = new ObjectQuery("SELECT EmbeddedControllerMajorVersion, EmbeddedControllerMinorVersion FROM Win32_BIOS");
-                using var ecSearcher = new ManagementObjectSearcher(scope, ecQuery);
-                var ecInfo = await Task.Run(() => ecSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-
-                if (ecInfo != null)
-                {
-                    int ecMajorVersion = Convert.ToInt32(ecInfo["EmbeddedControllerMajorVersion"]);
-                    int ecMinorVersion = Convert.ToInt32(ecInfo["EmbeddedControllerMinorVersion"]);
-                    scanStatus.EmbeddedControllerVersion = $"{ecMajorVersion}.{ecMinorVersion}";
-                }
-                else
-                {
-                    scanStatus.EmbeddedControllerVersion = "Embedded Controller information not available";
+                    scanStatus.SMBIOSVersion = "N/A";
+                    scanStatus.EmbeddedControllerVersion = "N/A";
                 }
             }
             catch (Exception ex)
             {
+                Logger.Log(LogLevel.ERROR, $"Error getting BIOS info: {ex.Message}", context: "GetBIOSInfoAsync");
                 scanStatus.BIOSVersionDate = "Error retrieving BIOS information";
                 scanStatus.SMBIOSVersion = "Error";
                 scanStatus.EmbeddedControllerVersion = "Error";
@@ -628,20 +648,24 @@ namespace IPProcessingTool
 
         private async Task GetLastLoggedUserAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
-            try
+            // Win32_ComputerSystem.UserName only returns the currently interactive user and is
+            // null when nobody is logged in. The registry key persists the last logged-on user
+            // even after logoff, making it the correct source for this field.
+            await Task.Run(() =>
             {
-                var userQuery = new ObjectQuery("SELECT UserName FROM Win32_ComputerSystem");
-                using var userSearcher = new ManagementObjectSearcher(scope, userQuery);
-                var user = await Task.Run(() => userSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
-                if (user != null)
+                try
                 {
-                    scanStatus.LastLoggedUser = user["UserName"]?.ToString() ?? "N/A";
+                    using var baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, scope.Path.Server);
+                    using var key = baseKey.OpenSubKey(
+                        @"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI");
+                    scanStatus.LastLoggedUser = key?.GetValue("LastLoggedOnUser") as string ?? "N/A";
                 }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Error getting last logged user: {ex.Message}", context: "GetLastLoggedUserAsync");
-            }
+                catch (Exception ex)
+                {
+                    Logger.Log(LogLevel.ERROR, $"Error getting last logged user: {ex.Message}", context: "GetLastLoggedUserAsync");
+                    scanStatus.LastLoggedUser = "N/A";
+                }
+            }, cancellationToken);
         }
 
         private async Task GetRAMSizeAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
@@ -697,46 +721,41 @@ namespace IPProcessingTool
 
         private async Task<string> GetWindowsReleaseIdAsync(ManagementScope scope, CancellationToken cancellationToken)
         {
-            try
+            return await Task.Run(() =>
             {
-                var query = new ObjectQuery(@"SELECT * FROM Win32_Registry");
-                using var searcher = new ManagementObjectSearcher(scope, query);
-                var registryEntries = await Task.Run(() => searcher.Get(), cancellationToken);
-
-                foreach (ManagementObject registryEntry in registryEntries)
+                try
                 {
                     using var baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, scope.Path.Server);
                     using var key = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                    if (key == null) return "Unknown";
 
-                    if (key != null)
-                    {
-                        string displayVersion = key.GetValue("DisplayVersion") as string;
-                        if (!string.IsNullOrEmpty(displayVersion))
-                        {
-                            return displayVersion;
-                        }
-
-                        // Fallback for older versions
-                        string releaseId = key.GetValue("ReleaseId") as string;
-                        if (!string.IsNullOrEmpty(releaseId))
-                        {
-                            return releaseId;
-                        }
-                    }
+                    // DisplayVersion is correct on Windows 10 20H2+ and all Windows 11 (e.g. "23H2")
+                    // ReleaseId is frozen at "2009" on Windows 11 — only used as legacy fallback
+                    return key.GetValue("DisplayVersion") as string
+                        ?? key.GetValue("ReleaseId") as string
+                        ?? "Unknown";
                 }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log(LogLevel.ERROR, $"Error getting Windows release ID: {ex.Message}", context: "GetWindowsReleaseIdAsync");
-            }
-            return "Unknown";
+                catch (Exception ex)
+                {
+                    Logger.Log(LogLevel.ERROR, $"Error getting Windows release ID: {ex.Message}", context: "GetWindowsReleaseIdAsync");
+                    return "Unknown";
+                }
+            }, cancellationToken);
         }
 
         private async Task GetOfficeVersionAsync(string machineName, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
             string officeVersion = "Not Installed";
-            string registryPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
             string[] officeKeywords = new[] { "Microsoft Office", "Office 365", "Microsoft 365" };
+
+            // Check both 64-bit and 32-bit (WOW6432Node) uninstall paths.
+            // Microsoft 365 64-bit installs under the standard path; legacy 32-bit Office installs
+            // under WOW6432Node on a 64-bit OS.
+            string[] registryPaths = new[]
+            {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            };
 
             try
             {
@@ -744,39 +763,36 @@ namespace IPProcessingTool
                 {
                     try
                     {
-                        using (RegistryKey baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, machineName))
-                        using (RegistryKey uninstallKey = baseKey.OpenSubKey(registryPath))
+                        using RegistryKey baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, machineName);
+                        foreach (string registryPath in registryPaths)
                         {
-                            if (uninstallKey != null)
+                            if (officeVersion != "Not Installed") break;
+
+                            using RegistryKey uninstallKey = baseKey.OpenSubKey(registryPath);
+                            if (uninstallKey == null) continue;
+
+                            foreach (string subKeyName in uninstallKey.GetSubKeyNames())
                             {
-                                foreach (string subKeyName in uninstallKey.GetSubKeyNames())
+                                cancellationToken.ThrowIfCancellationRequested();
+
+                                using RegistryKey officeKey = uninstallKey.OpenSubKey(subKeyName);
+                                if (officeKey == null) continue;
+
+                                string displayName = officeKey.GetValue("DisplayName") as string;
+                                string displayVersion = officeKey.GetValue("DisplayVersion") as string;
+
+                                if (!string.IsNullOrEmpty(displayName) && !string.IsNullOrEmpty(displayVersion) &&
+                                    officeKeywords.Any(kw => displayName.Contains(kw, StringComparison.OrdinalIgnoreCase)) &&
+                                    !displayName.Contains("Runtime", StringComparison.OrdinalIgnoreCase) &&
+                                    !displayName.Contains("Tools", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    cancellationToken.ThrowIfCancellationRequested();
-
-                                    using (RegistryKey officeKey = uninstallKey.OpenSubKey(subKeyName))
-                                    {
-                                        if (officeKey != null)
-                                        {
-                                            string displayName = officeKey.GetValue("DisplayName") as string;
-                                            string displayVersion = officeKey.GetValue("DisplayVersion") as string;
-
-                                            if (!string.IsNullOrEmpty(displayName) && !string.IsNullOrEmpty(displayVersion))
-                                            {
-                                                if (officeKeywords.Any(keyword => displayName.Contains(keyword, StringComparison.OrdinalIgnoreCase)) &&
-                                                    !displayName.Contains("Runtime", StringComparison.OrdinalIgnoreCase) &&
-                                                    !displayName.Contains("Tools", StringComparison.OrdinalIgnoreCase))
-                                                {
-                                                    officeVersion = $"{displayName} ({displayVersion})";
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
+                                    officeVersion = $"{displayName} ({displayVersion})";
+                                    break;
                                 }
                             }
                         }
                     }
-                    catch (Exception ex) when (!(ex is OperationCanceledException))
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Logger.Log(LogLevel.ERROR, $"Error accessing registry for {machineName}: {ex.Message}", context: "GetOfficeVersionAsync");
                         officeVersion = "Error accessing registry";
@@ -911,7 +927,11 @@ namespace IPProcessingTool
         {
             try
             {
-                var query = new ObjectQuery("SELECT * FROM Win32_NetworkAdapter WHERE PhysicalAdapter=True");
+                // Exclude Microsoft virtual/debug adapters (Hyper-V, Kernel Debug, Loopback)
+                // which report PhysicalAdapter=True on Windows 11 23H2
+                var query = new ObjectQuery(
+                    "SELECT * FROM Win32_NetworkAdapter WHERE PhysicalAdapter=True " +
+                    "AND Manufacturer != 'Microsoft'");
                 using var searcher = new ManagementObjectSearcher(scope, query);
                 var adapters = await Task.Run(() => searcher.Get(), cancellationToken);
 
@@ -1062,29 +1082,48 @@ namespace IPProcessingTool
             }
         }
 
+        private static readonly Dictionary<string, string> DefaultFloorMappings = new()
+        {
+            { "10.9.115", "30 Hudson 20 east" },
+            { "10.9.116", "30 Hudson 20 west" },
+            { "10.9.97",  "30 Hudson 25 west" },
+            { "10.9.107", "30 Hudson 25 west" },
+            { "10.9.96",  "30 Hudson 25 east" },
+            { "10.9.99",  "30 Hudson 26 west" },
+            { "10.9.109", "30 Hudson 26 west" },
+            { "10.9.108", "30 Hudson 26 east" },
+            { "10.9.101", "30 Hudson 27 west" },
+            { "10.9.111", "30 Hudson 27 west" },
+            { "10.9.114", "30 Hudson 27 west" },
+            { "10.9.100", "30 Hudson 27 east" },
+            { "10.9.110", "30 Hudson 27 east" },
+            { "10.9.103", "30 Hudson 28 west" },
+            { "10.9.102", "30 Hudson 28 east" },
+            { "10.9.105", "30 Hudson 29 west" },
+            { "10.9.104", "30 Hudson 29 east" },
+            { "10.9.106", "30 Hudson 30 west" },
+        };
+
         private void InitializeFloorMappings()
         {
-            floorMappings = new Dictionary<string, string>
+            // Load from floor_mappings.json next to the exe, fall back to built-in defaults.
+            string jsonPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "floor_mappings.json");
+            try
             {
-                { "10.9.115", "30 Hudson 20 east" },
-                { "10.9.116", "30 Hudson 20 west" },
-                { "10.9.97",  "30 Hudson 25 west" },
-                { "10.9.107", "30 Hudson 25 west" },
-                { "10.9.96",  "30 Hudson 25 east" },
-                { "10.9.99",  "30 Hudson 26 west" },
-                { "10.9.109", "30 Hudson 26 west" },
-                { "10.9.108", "30 Hudson 26 east" },
-                { "10.9.101", "30 Hudson 27 west" },
-                { "10.9.111", "30 Hudson 27 west" },
-                { "10.9.114", "30 Hudson 27 west" },
-                { "10.9.100", "30 Hudson 27 east" },
-                { "10.9.110", "30 Hudson 27 east" },
-                { "10.9.103", "30 Hudson 28 west" },
-                { "10.9.102", "30 Hudson 28 east" },
-                { "10.9.105", "30 Hudson 29 west" },
-                { "10.9.104", "30 Hudson 29 east" },
-                { "10.9.106", "30 Hudson 30 west" },
-            };
+                if (File.Exists(jsonPath))
+                {
+                    var json = File.ReadAllText(jsonPath);
+                    floorMappings = JsonSerializer.Deserialize<Dictionary<string, string>>(json)
+                                    ?? new Dictionary<string, string>(DefaultFloorMappings);
+                    Logger.Log(LogLevel.INFO, $"Loaded floor mappings from {jsonPath}", context: "InitializeFloorMappings");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log(LogLevel.WARNING, $"Could not load floor_mappings.json: {ex.Message}. Using defaults.", context: "InitializeFloorMappings");
+            }
+            floorMappings = new Dictionary<string, string>(DefaultFloorMappings);
         }
 
         private string GetFloorForIP(string ipAddress)
@@ -1123,7 +1162,7 @@ namespace IPProcessingTool
                 {
                     ScanStatuses.Add(scanStatus);
                 }
-                StatusDataGrid.Items.Refresh();
+                // ObservableCollection notifies the grid automatically — no Items.Refresh() needed.
             });
         }
 
@@ -1134,30 +1173,6 @@ namespace IPProcessingTool
             UpdateStatusBar("Grid cleared.");
         }
 
-        private bool IsValidIP(string ip)
-        {
-            return IPAddress.TryParse(ip, out _);
-        }
-
-        private bool IsValidIPSegment(string segment)
-        {
-            string[] parts = segment.Split('.');
-            if (parts.Length != 3) return false;
-            return parts.All(part => byte.TryParse(part, out _));
-        }
-
-        private void HighlightInvalidInput(string input)
-        {
-            var scanStatus = new ScanStatus { IPAddress = input, Status = "Invalid", Details = "Invalid IP/Segment" };
-            UpdateScanStatus(scanStatus);
-            Logger.Log(LogLevel.WARNING, "Invalid IP/Segment input", context: "HighlightInvalidInput", additionalInfo: input);
-        }
-
-        private void ShowInvalidInputMessage()
-        {
-            MessageBox.Show("Invalid IP or Segment format. Please enter a valid IP or Segment.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            Logger.Log(LogLevel.WARNING, "Displayed invalid input message", context: "ShowInvalidInputMessage");
-        }
 
         private void UpdateStatusBar(string message)
         {
@@ -1167,11 +1182,30 @@ namespace IPProcessingTool
             });
         }
 
-        private void UpdateProgressBar(int value)
+        private void UpdateProgressBar(int value, int done = 0, int total = 0)
         {
             Dispatcher.Invoke(() =>
             {
                 ProgressBar.Value = value;
+                if (ProgressText != null)
+                {
+                    ProgressText.Text = total > 0
+                        ? $"{done} / {total}  ({value}%)"
+                        : value > 0 ? $"{value}%" : "";
+                }
+            });
+        }
+
+        private void UpdateScanSummary()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                int online   = ScanStatuses.Count(s => s.Status == "Complete" || s.Status == "Reachable");
+                int offline  = ScanStatuses.Count(s => s.Status == "Not Reachable");
+                int errors   = ScanStatuses.Count(s => s.Status is "Error" or "Fatal Error" or "Unexpected Error" or "Network Error");
+                int timeout  = ScanStatuses.Count(s => s.Status == "Timeout");
+                int total    = ScanStatuses.Count;
+                UpdateStatusBar($"Done — {total} total | {online} online | {offline} offline | {errors} errors | {timeout} timeouts");
             });
         }
 
@@ -1288,7 +1322,7 @@ namespace IPProcessingTool
                     {
                         var line = string.Join(",", dataColumnSettings.Where(c => c.IsSelected).Select(c =>
                         {
-                            var value = GetPropertyValue(scanStatus, c.Name.Replace(" ", ""));
+                            var value = GetPropertyValue(scanStatus, c);
                             return $"\"{value}\"";
                         }));
                         writer.WriteLine(line);
@@ -1303,9 +1337,9 @@ namespace IPProcessingTool
             }
         }
 
-        private string GetPropertyValue(ScanStatus scanStatus, string propertyName)
+        private string GetPropertyValue(ScanStatus scanStatus, ColumnSetting column)
         {
-            var property = typeof(ScanStatus).GetProperty(propertyName);
+            var property = typeof(ScanStatus).GetProperty(column.PropertyName);
             return property?.GetValue(scanStatus)?.ToString() ?? "N/A";
         }
 

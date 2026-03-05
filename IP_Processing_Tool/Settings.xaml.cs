@@ -24,8 +24,9 @@ namespace IPProcessingTool
             InitializeComponent();
 
             // Initialize data
-            originalDataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns);
-            DataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, IsSelected = c.IsSelected }));
+            originalDataColumns = new ObservableCollection<ColumnSetting>(
+                currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, PropertyName = c.PropertyName, IsSelected = c.IsSelected }));
+            DataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, PropertyName = c.PropertyName, IsSelected = c.IsSelected }));
             DataColumnsList.ItemsSource = DataColumns;
 
             AutoSave = autoSave;
@@ -151,16 +152,16 @@ namespace IPProcessingTool
             return !DataColumns.SequenceEqual(originalDataColumns, new ColumnSettingComparer());
         }
 
-        private void ShowSuccessMessage()
-        {
-            // This could be expanded to show a nice in-window success message
-            // For now, we'll rely on the dialog closing to indicate success
-        }
     }
 
     public class ColumnSetting
     {
         public string Name { get; set; }
+        /// <summary>
+        /// The exact property name on ScanStatus that this column binds to.
+        /// Avoids fragile Name.Replace(" ", "") string manipulation.
+        /// </summary>
+        public string PropertyName { get; set; }
         public bool IsSelected { get; set; }
     }
 

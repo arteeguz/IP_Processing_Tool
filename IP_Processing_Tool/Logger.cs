@@ -6,9 +6,9 @@ namespace IPProcessingTool
 {
     public static class Logger
     {
-        // private static readonly string LogFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.log");
-        private static readonly string logFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "log.txt");
-        // private static readonly string logFilePath = @"\\netapp2b\DSS Interns\IP_Scanner\log.txt";
+        private static readonly string logFilePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "IPProcessingTool", "app.log");
 
         public static void Log(LogLevel level, string message, string context = "", string additionalInfo = "")
         {
@@ -17,6 +17,7 @@ namespace IPProcessingTool
 
             try
             {
+                Directory.CreateDirectory(Path.GetDirectoryName(logFilePath)!);
                 File.AppendAllText(logFilePath, logEntry + Environment.NewLine);
             }
             catch (Exception ex)

@@ -83,8 +83,13 @@
             <!-- DataGrid columns are dynamically generated in code-behind -->
         </DataGrid>
 
-        <!-- Progress Bar -->
-        <ProgressBar Name="ProgressBar" Grid.Row="2" Height="20" Margin="10"/>
+        <!-- Progress Bar with percentage overlay -->
+        <Grid Grid.Row="2" Margin="10,5">
+            <ProgressBar Name="ProgressBar" Height="22"/>
+            <TextBlock Name="ProgressText" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       FontSize="11" FontWeight="SemiBold" Foreground="White"
+                       Effect="{x:Null}"/>
+        </Grid>
 
         <!-- Status Bar -->
         <StatusBar Grid.Row="3">
