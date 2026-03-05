@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -11,6 +13,7 @@ namespace IPProcessingTool
     public partial class Settings : Window
     {
         public ObservableCollection<ColumnSetting> DataColumns { get; set; }
+        public ObservableCollection<FloorMappingEntry> FloorMappings { get; set; }
         public bool AutoSave { get; set; }
         public int PingTimeout { get; set; }
         public int MaxConcurrentScans { get; set; }
@@ -19,7 +22,7 @@ namespace IPProcessingTool
 
         private ObservableCollection<ColumnSetting> originalDataColumns;
 
-        public Settings(ObservableCollection<ColumnSetting> currentDataColumns, bool autoSave, int pingTimeout, int maxConcurrentScans, int executionTimeLimit)
+        public Settings(ObservableCollection<ColumnSetting> currentDataColumns, bool autoSave, int pingTimeout, int maxConcurrentScans, int executionTimeLimit, Dictionary<string, string> floorMappings)
         {
             InitializeComponent();
 
@@ -28,6 +31,11 @@ namespace IPProcessingTool
                 currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, PropertyName = c.PropertyName, IsSelected = c.IsSelected }));
             DataColumns = new ObservableCollection<ColumnSetting>(currentDataColumns.Select(c => new ColumnSetting { Name = c.Name, PropertyName = c.PropertyName, IsSelected = c.IsSelected }));
             DataColumnsList.ItemsSource = DataColumns;
+
+            FloorMappings = new ObservableCollection<FloorMappingEntry>(
+                (floorMappings ?? new Dictionary<string, string>())
+                    .Select(kv => new FloorMappingEntry { Segment = kv.Key, Floor = kv.Value }));
+            FloorMappingsGrid.ItemsSource = FloorMappings;
 
             AutoSave = autoSave;
             PingTimeout = pingTimeout == 0 ? 3000 : pingTimeout; // Use 3000ms if not set
@@ -99,6 +107,13 @@ namespace IPProcessingTool
                 // Check if data retrieval options have changed
                 DataRetrievalOptionsChanged = HasDataRetrievalOptionsChanged();
 
+                // Save floor mappings to JSON
+                var mappingsDict = FloorMappings
+                    .Where(e => !string.IsNullOrWhiteSpace(e.Segment))
+                    .ToDictionary(e => e.Segment.Trim(), e => e.Floor.Trim());
+                string jsonPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "floor_mappings.json");
+                File.WriteAllText(jsonPath, JsonSerializer.Serialize(mappingsDict, new JsonSerializerOptions { WriteIndented = true }));
+
                 DialogResult = true;
                 Close();
             }
@@ -152,6 +167,24 @@ namespace IPProcessingTool
             return !DataColumns.SequenceEqual(originalDataColumns, new ColumnSettingComparer());
         }
 
+        private void AddMappingRow_Click(object sender, RoutedEventArgs e)
+        {
+            FloorMappings.Add(new FloorMappingEntry());
+            FloorMappingsGrid.ScrollIntoView(FloorMappings[FloorMappings.Count - 1]);
+        }
+
+        private void RemoveMappingRow_Click(object sender, RoutedEventArgs e)
+        {
+            if (FloorMappingsGrid.SelectedItem is FloorMappingEntry selected)
+                FloorMappings.Remove(selected);
+        }
+
+    }
+
+    public class FloorMappingEntry
+    {
+        public string Segment { get; set; } = "";
+        public string Floor   { get; set; } = "";
     }
 
     public class ColumnSetting

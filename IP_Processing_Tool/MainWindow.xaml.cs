@@ -157,7 +157,7 @@ namespace IPProcessingTool
 
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
-            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, MaxConcurrentScans, ExecutionTimeLimit);
+            var settingsWindow = new Settings(dataColumnSettings, autoSave, pingTimeout, MaxConcurrentScans, ExecutionTimeLimit, floorMappings);
             if (settingsWindow.ShowDialog() == true)
             {
                 dataColumnSettings = new ObservableCollection<ColumnSetting>(settingsWindow.DataColumns);
@@ -165,6 +165,9 @@ namespace IPProcessingTool
                 pingTimeout = settingsWindow.PingTimeout;
                 MaxConcurrentScans = settingsWindow.MaxConcurrentScans;
                 ExecutionTimeLimit = settingsWindow.ExecutionTimeLimit;
+                floorMappings = settingsWindow.FloorMappings
+                    .Where(e => !string.IsNullOrWhiteSpace(e.Segment))
+                    .ToDictionary(e => e.Segment.Trim(), e => e.Floor.Trim());
 
                 SavePersistedSettings();
                 UpdateDataGridColumns();
