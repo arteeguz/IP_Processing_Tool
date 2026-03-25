@@ -19,6 +19,9 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.ComponentModel;
 using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace IPProcessingTool
 {
@@ -52,12 +55,83 @@ namespace IPProcessingTool
                 MaxDegreeOfParallelism = Environment.ProcessorCount
             };
 
+            // Capture the Windows user physically logged into this machine (may differ from RunAs admin)
+            Logger.InteractiveUser = GetLocalLoggedOnUser();
+
             InitializeFloorMappings();
             InitializeColumnSettings();
             LoadPersistedSettings();
             UpdateDataGridColumns();
 
+            // Shift+scroll → horizontal scroll on DataGrid
+            StatusDataGrid.PreviewMouseWheel += DataGrid_PreviewMouseWheel;
+
+            // Touchpad horizontal swipe → horizontal scroll (WM_MOUSEHWHEEL)
+            SourceInitialized += (s, e) =>
+            {
+                var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+                source?.AddHook(WndProc);
+            };
+
             Logger.Log(LogLevel.INFO, "Application started");
+        }
+
+        private static string GetLocalLoggedOnUser()
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI");
+                return key?.GetValue("LastLoggedOnUser")?.ToString() ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private const int WM_MOUSEHWHEEL = 0x020E;
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_MOUSEHWHEEL)
+            {
+                int delta = unchecked((short)(wParam.ToInt64() >> 16));
+                var sv = FindScrollViewer(StatusDataGrid);
+                if (sv != null)
+                {
+                    if (delta > 0) sv.LineRight();
+                    else sv.LineLeft();
+                    handled = true;
+                }
+            }
+            return IntPtr.Zero;
+        }
+
+        private void DataGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (Keyboard.Modifiers == ModifierKeys.Shift)
+            {
+                var sv = FindScrollViewer(StatusDataGrid);
+                if (sv != null)
+                {
+                    if (e.Delta < 0) sv.LineRight();
+                    else sv.LineLeft();
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private static ScrollViewer FindScrollViewer(DependencyObject obj)
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(obj); i++)
+            {
+                var child = VisualTreeHelper.GetChild(obj, i);
+                if (child is ScrollViewer sv) return sv;
+                var result = FindScrollViewer(child);
+                if (result != null) return result;
+            }
+            return null;
         }
 
         private void LoadPersistedSettings()
@@ -353,33 +427,62 @@ namespace IPProcessingTool
                 .OfType<ScanStatus>()
                 .Distinct()
                 .ToList();
+
             if (selectedItems.Count == 0)
             {
-                MessageBox.Show("Please select at least one IP address to wake.", "No Selection", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(
+                    "No rows selected.\n\n" +
+                    "How to use Wake-on-LAN:\n" +
+                    "  1. Run a scan so MAC addresses are populated.\n" +
+                    "  2. Select one or more rows (click the row header on the left edge, or use Ctrl/Shift+click).\n" +
+                    "  3. Click Wake-on-LAN — magic packets will be broadcast on your local network.\n\n" +
+                    "No credentials are required. The target machine must have Wake-on-LAN enabled in its BIOS settings.",
+                    "Wake-on-LAN — No Selection", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
+            var results = new List<string>();
+            int sent = 0, skipped = 0;
+
             foreach (var scanStatus in selectedItems)
             {
-                if (!string.IsNullOrEmpty(scanStatus.MACAddress))
+                string ip = scanStatus.IPAddress;
+                string mac = scanStatus.MACAddress ?? "";
+                bool hasMac = !string.IsNullOrEmpty(mac) && mac != "N/A" && mac != "Not Available" && mac != "Error";
+
+                if (hasMac)
                 {
                     try
                     {
-                        await WOL.WakeOnLan(scanStatus.MACAddress);
-                        Logger.Log(LogLevel.INFO, $"Wake-on-LAN packet sent to {scanStatus.IPAddress} (MAC: {scanStatus.MACAddress})", context: "WakeOnLAN");
+                        await WOL.WakeOnLan(mac);
+                        results.Add($"✓  {ip}  ({mac})");
+                        Logger.Log(LogLevel.INFO, $"Wake-on-LAN packet sent to {ip} (MAC: {mac})", context: "WakeOnLAN");
+                        sent++;
                     }
                     catch (Exception ex)
                     {
-                        Logger.Log(LogLevel.ERROR, $"Error sending Wake-on-LAN packet to {scanStatus.IPAddress}: {ex.Message}", context: "WakeOnLAN");
+                        results.Add($"✗  {ip}  ({mac})  — send error: {ex.Message}");
+                        Logger.Log(LogLevel.ERROR, $"WoL send failed for {ip}: {ex.Message}", context: "WakeOnLAN");
+                        skipped++;
                     }
                 }
                 else
                 {
-                    Logger.Log(LogLevel.WARNING, $"MAC address not found for IP {scanStatus.IPAddress}", context: "WakeOnLAN");
+                    results.Add($"—  {ip}  — skipped (no MAC address; run a scan first)");
+                    Logger.Log(LogLevel.WARNING, $"WoL skipped for {ip}: no MAC address", context: "WakeOnLAN");
+                    skipped++;
                 }
             }
 
-            MessageBox.Show("Wake-on-LAN packets sent to selected IP addresses.", "Wake-on-LAN", MessageBoxButton.OK, MessageBoxImage.Information);
+            string body =
+                $"Sent: {sent}    Skipped: {skipped}\n\n" +
+                string.Join("\n", results) + "\n\n" +
+                "Magic packets are UDP broadcasts — no login needed.\n" +
+                "The machine will power on only if Wake-on-LAN is enabled in its BIOS.\n" +
+                "Allow 30–60 seconds for the machine to boot before checking connectivity.";
+
+            MessageBox.Show(body, "Wake-on-LAN Results", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusBarText.Text = $"Wake-on-LAN: {sent} packet(s) sent, {skipped} skipped.";
         }
 
         private async Task<ScanStatus> ProcessIPAsync(string ip, CancellationToken cancellationToken)
@@ -564,23 +667,13 @@ namespace IPProcessingTool
 
         private async Task GetMachineModelAsync(ManagementScope scope, ScanStatus scanStatus, CancellationToken cancellationToken)
         {
-            // Win32_ComputerSystemProduct.Version is often blank or "None" on modern hardware.
-            // Win32_ComputerSystem.Manufacturer + Model reliably returns e.g. "HP EliteBook 840 G9".
             try
             {
-                var modelQuery = new ObjectQuery("SELECT Manufacturer, Model FROM Win32_ComputerSystem");
+                var modelQuery = new ObjectQuery("SELECT Version FROM Win32_ComputerSystemProduct");
                 using var modelSearcher = new ManagementObjectSearcher(scope, modelQuery);
                 var model = await Task.Run(() => modelSearcher.Get().Cast<ManagementObject>().FirstOrDefault(), cancellationToken);
                 if (model != null)
-                {
-                    string manufacturer = model["Manufacturer"]?.ToString()?.Trim() ?? "";
-                    string modelName = model["Model"]?.ToString()?.Trim() ?? "";
-                    scanStatus.MachineModel = string.IsNullOrEmpty(manufacturer)
-                        ? modelName
-                        : $"{manufacturer} {modelName}".Trim();
-                    if (string.IsNullOrEmpty(scanStatus.MachineModel))
-                        scanStatus.MachineModel = "N/A";
-                }
+                    scanStatus.MachineModel = model["Version"]?.ToString() ?? "N/A";
             }
             catch (Exception ex)
             {
